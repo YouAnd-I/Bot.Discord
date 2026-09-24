@@ -483,5 +483,4 @@ $RECYCLE.BIN/
 
 # IT ticket runtime data
 it-tickets.txt
-src/it-tickets/*
-!src/it-tickets/*.s.json
+src/it-tickets/
