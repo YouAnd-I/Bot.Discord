@@ -76,13 +76,15 @@ host.AddSlashCommand("form", "Open a modal form", () =>
 // 7. /it — IT ticket. Bare /it → modal form. Any option → ticket created directly.
 host.AddSlashCommand("it", "Create an IT ticket", (
     ApplicationCommandContext c,
-    [SlashCommandParameter(Description = "Short summary")] string? title = null,
+    [SlashCommandParameter(Description = "Short summary — suggests similar past tickets",
+                           AutocompleteProviderType = typeof(TicketAutocompleteProvider))] string? title = null,
     [SlashCommandParameter(Description = "What happened?")] string? description = null,
-    [SlashCommandParameter(Description = "How urgent is it?")] TicketPriority? priority = null) =>
+    [SlashCommandParameter(Description = "How urgent is it?")] TicketPriority? priority = null,
+    [SlashCommandParameter(Description = "Attach a screenshot or file")] Attachment? attachment = null) =>
 {
-    if (title is not null || description is not null || priority is not null)
+    if (title is not null || description is not null || priority is not null || attachment is not null)
         return (InteractionCallbackProperties)InteractionCallback.Message(SaveTicket(
-            c.User.ToString(), title, description, priority ?? TicketPriority.Urgent));
+            c.User.ToString(), title, description, priority ?? TicketPriority.Urgent, attachment?.Url));
 
     return InteractionCallback.Modal(new ModalProperties("modal-it-ticket", "New IT Ticket")
     {
@@ -115,8 +117,7 @@ host.AddComponentInteraction<ModalInteractionContext>("modal-it-ticket", (ModalI
 host.AddComponentInteraction<ButtonInteractionContext>("it-status",
     (ButtonInteractionContext c, TicketStatus status, string ticketId) =>
 {
-    File.AppendAllText("it-tickets.txt",
-        $"[{DateTimeOffset.UtcNow:u}] user={c.User} ticket={ticketId} status={StatusName(status)}\n");
+    TicketStore.AppendStatus(c.User.ToString(), ticketId, StatusName(status));
     return InteractionCallback.ModifyMessage(m =>
     {
         m.Content = $"**IT ticket `{ticketId}`** — status updated to `{StatusName(status)}`";
@@ -125,14 +126,23 @@ host.AddComponentInteraction<ButtonInteractionContext>("it-status",
 });
 
 static InteractionMessageProperties SaveTicket(
-    string user, string? title, string? description, TicketPriority priority)
+    string user, string? title, string? description, TicketPriority priority, string? attachmentUrl = null)
 {
     var ticketId = Guid.NewGuid().ToString("N")[..8];
-    File.AppendAllText("it-tickets.txt",
-        $"[{DateTimeOffset.UtcNow:u}] user={user} ticket={ticketId} priority={PriorityName(priority)} | {title ?? "(no title)"} — {description}\n");
+    TicketStore.Append(user, ticketId, PriorityName(priority), title, description, attachmentUrl);
+
+    var content = $"**IT ticket `{ticketId}` created**\nTitle: **{title}**\nPriority: `{PriorityName(priority)}`\n> {description}";
+    if (attachmentUrl is not null)
+        content += $"\n📎 {attachmentUrl}";
+
+    var similar = TicketStore.Similar($"{title} {description}", excludeId: ticketId).Take(3).ToList();
+    if (similar.Count > 0)
+        content += "\n\n**Similar past tickets:**\n" +
+            string.Join('\n', similar.Select(t => $"- `{t.Id}` **{t.Title}** — {t.Desc}"));
+
     return new InteractionMessageProperties
     {
-        Content = $"**IT ticket `{ticketId}` created**\nTitle: **{title}**\nPriority: `{PriorityName(priority)}`\n> {description}\n\n*Set status:*",
+        Content = content + "\n\n*Set status:*",
         Flags = MessageFlags.Ephemeral,
         Components =
         [
@@ -189,11 +199,80 @@ await host.RunAsync();
 
 public enum TicketStatus { Solved, NoVisit, Unresolved, Planned }
 
+// Ticket storage — append-only txt, parseable "key=value" fields so we can search back
+public static class TicketStore
+{
+    public const string FileName = "it-tickets.txt";
+
+    public record Ticket(string Id, string Title, string Desc);
+
+    public static void Append(string user, string id, string priority,
+        string? title, string? desc, string? file)
+    {
+        var line = $"[{DateTimeOffset.UtcNow:u}] user={user} ticket={id} priority={priority} | title={Clean(title) ?? "(no title)"} | desc={Clean(desc)}";
+        if (file is not null) line += $" | file={file}";
+        File.AppendAllText(FileName, line + '\n');
+    }
+
+    public static void AppendStatus(string user, string id, string status) =>
+        File.AppendAllText(FileName, $"[{DateTimeOffset.UtcNow:u}] user={user} ticket={id} status={status}\n");
+
+    public static List<Ticket> Load()
+    {
+        var list = new List<Ticket>();
+        if (!File.Exists(FileName)) return list;
+        foreach (var line in File.ReadLines(FileName))
+        {
+            var parts = line.Split(" | ");
+            var id = parts[0].Split(' ').FirstOrDefault(p => p.StartsWith("ticket="))?[7..];
+            var title = parts.ElementAtOrDefault(1);
+            if (id is null || title is null || !title.StartsWith("title=")) continue;
+            var desc = parts.ElementAtOrDefault(2);
+            list.Add(new(id, title[6..], desc is not null && desc.StartsWith("desc=") ? desc[5..] : ""));
+        }
+        return list;
+    }
+
+    // Silly search: score = words found in title or description
+    public static IEnumerable<Ticket> Similar(string? query, int take = 25, string? excludeId = null)
+    {
+        var words = (query ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(w => w.Length > 1).ToArray();
+        if (words.Length == 0) return [];
+        return Load()
+            .Where(t => t.Id != excludeId)
+            .Select(t => (t, score: words.Count(w =>
+                t.Title.Contains(w, StringComparison.OrdinalIgnoreCase) ||
+                t.Desc.Contains(w, StringComparison.OrdinalIgnoreCase))))
+            .Where(x => x.score > 0)
+            .OrderByDescending(x => x.score)
+            .Take(take)
+            .Select(x => x.t);
+    }
+
+    private static string? Clean(string? s) =>
+        s?.Replace("\r", " ").Replace("\n", " ").Replace("|", "/");
+}
+
 public enum TicketPriority
 {
     [SlashCommandChoice(Name = "urgent")] Urgent,
     [SlashCommandChoice(Name = "no-rush")] NoRush,
     [SlashCommandChoice(Name = "report")] Report,
+}
+
+public class TicketAutocompleteProvider : IAutocompleteProvider<AutocompleteInteractionContext>
+{
+    public ValueTask<IEnumerable<ApplicationCommandOptionChoiceProperties>?> GetChoicesAsync(
+        ApplicationCommandInteractionDataOption option, AutocompleteInteractionContext context)
+    {
+        var input = option.Value?.ToString() ?? "";
+        var titles = string.IsNullOrWhiteSpace(input)
+            ? TicketStore.Load().Select(t => t.Title).TakeLast(25)
+            : TicketStore.Similar(input).Select(t => t.Title);
+        return new(titles.Select(t => new ApplicationCommandOptionChoiceProperties(
+            t.Length > 100 ? t[..100] : t, t.Length > 100 ? t[..100] : t)));
+    }
 }
 
 public class FruitAutocompleteProvider : IAutocompleteProvider<AutocompleteInteractionContext>
