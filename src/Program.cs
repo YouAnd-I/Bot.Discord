@@ -73,34 +73,61 @@ host.AddSlashCommand("form", "Open a modal form", () =>
         new LabelProperties("Message", new TextInputProperties("text", TextInputStyle.Paragraph)),
     }));
 
-// 7. /it — IT ticket modal: description + priority dropdown, personal report, saved to txt
-host.AddSlashCommand("it", "Create an IT ticket", () =>
-    InteractionCallback.Modal(new ModalProperties("modal-it-ticket", "New IT Ticket")
+// 7. /it — IT ticket. Bare /it → modal form. Any option → ticket created directly.
+host.AddSlashCommand("it", "Create an IT ticket", (
+    ApplicationCommandContext c,
+    [SlashCommandParameter(Description = "Short summary")] string? title = null,
+    [SlashCommandParameter(Description = "What happened?")] string? description = null,
+    [SlashCommandParameter(Description = "How urgent is it?")] TicketPriority? priority = null) =>
+{
+    if (title is not null || description is not null || priority is not null)
+        return (InteractionCallbackProperties)InteractionCallback.Message(SaveTicket(
+            c.User.ToString(), title, description, priority ?? TicketPriority.Urgent));
+
+    return InteractionCallback.Modal(new ModalProperties("modal-it-ticket", "New IT Ticket")
     {
+        new LabelProperties("Title", new TextInputProperties("title", TextInputStyle.Short)),
         new LabelProperties("Description", new TextInputProperties("description", TextInputStyle.Paragraph)),
         new LabelProperties("Priority", new StringMenuProperties("priority")
         {
-            new StringMenuSelectOptionProperties("Urgent", "urgent"),
+            new StringMenuSelectOptionProperties("Urgent", "urgent") { Default = true },
             new StringMenuSelectOptionProperties("No rush", "no-rush"),
             new StringMenuSelectOptionProperties("Report", "report"),
         }),
-    }));
+    });
+});
 
 host.AddComponentInteraction<ModalInteractionContext>("modal-it-ticket", (ModalInteractionContext c) =>
 {
     var fields = c.Components.OfType<Label>().Select(l => l.Component).ToList();
-    var description = fields.OfType<TextInput>().First().Value;
-    var priority = fields.OfType<StringMenu>().First().SelectedValues?.FirstOrDefault() ?? "unspecified";
-
-    var line = $"[{DateTimeOffset.UtcNow:u}] user={c.User} priority={priority} | {description}";
-    File.AppendAllText("it-tickets.txt", line + Environment.NewLine);
-
-    return InteractionCallback.Message(new InteractionMessageProperties
+    var inputs = fields.OfType<TextInput>().ToList();
+    var priority = fields.OfType<StringMenu>().First().SelectedValues?.FirstOrDefault() switch
     {
-        Content = $"**IT ticket created**\nPriority: `{priority}`\n> {description}",
-        Flags = MessageFlags.Ephemeral,
-    });
+        "no-rush" => TicketPriority.NoRush,
+        "report" => TicketPriority.Report,
+        _ => TicketPriority.Urgent,
+    };
+    return InteractionCallback.Message(
+        SaveTicket(c.User.ToString(), inputs[0].Value, inputs[1].Value, priority));
 });
+
+static InteractionMessageProperties SaveTicket(
+    string user, string? title, string? description, TicketPriority priority)
+{
+    var priorityName = priority switch
+    {
+        TicketPriority.NoRush => "no-rush",
+        TicketPriority.Report => "report",
+        _ => "urgent",
+    };
+    File.AppendAllText("it-tickets.txt",
+        $"[{DateTimeOffset.UtcNow:u}] user={user} priority={priorityName} | {title ?? "(no title)"} — {description}\n");
+    return new InteractionMessageProperties
+    {
+        Content = $"**IT ticket created**\nTitle: **{title}**\nPriority: `{priorityName}`\n> {description}",
+        Flags = MessageFlags.Ephemeral,
+    };
+}
 
 // 8. Context-menu commands — right-click a user or a message
 host.AddUserCommand("User Info", (User user) =>
@@ -126,6 +153,13 @@ host.AddComponentInteraction<ModalInteractionContext>("modal-hello",
         c.Components.OfType<Label>().Select(l => l.Component).OfType<TextInput>().Select(i => i.Value)));
 
 await host.RunAsync();
+
+public enum TicketPriority
+{
+    [SlashCommandChoice(Name = "urgent")] Urgent,
+    [SlashCommandChoice(Name = "no-rush")] NoRush,
+    [SlashCommandChoice(Name = "report")] Report,
+}
 
 public class FruitAutocompleteProvider : IAutocompleteProvider<AutocompleteInteractionContext>
 {
