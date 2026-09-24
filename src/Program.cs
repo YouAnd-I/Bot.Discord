@@ -74,17 +74,17 @@ host.AddSlashCommand("form", "Open a modal form", () =>
     }));
 
 // 7. Context-menu commands — right-click a user or a message
-host.AddUserCommand("User Info", (UserCommandContext c) =>
+host.AddUserCommand("User Info", (User user) =>
     InteractionCallback.Message(new InteractionMessageProperties
     {
-        Content = $"{c.Target} — ID `{c.Target.Id}`",
+        Content = $"{user} — ID `{user.Id}`",
         Flags = MessageFlags.Ephemeral,
     }));
 
-host.AddMessageCommand("Echo Message", (MessageCommandContext c) =>
+host.AddMessageCommand("Echo Message", (RestMessage m) =>
     InteractionCallback.Message(new InteractionMessageProperties
     {
-        Content = $"Echo: {c.Target.Content}",
+        Content = $"Echo: {m.Content}",
         Flags = MessageFlags.Ephemeral,
     }));
 
