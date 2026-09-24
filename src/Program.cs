@@ -96,6 +96,7 @@ host.AddSlashCommand("it", "Create an IT ticket", (
             new StringMenuSelectOptionProperties("No rush", "no-rush"),
             new StringMenuSelectOptionProperties("Report", "report"),
         }),
+        new LabelProperties("Attachment", new FileUploadProperties("file") { Required = false, MaxValues = 1 }),
     });
 });
 
@@ -103,6 +104,7 @@ host.AddComponentInteraction<ModalInteractionContext>("modal-it-ticket", (ModalI
 {
     var fields = c.Components.OfType<Label>().Select(l => l.Component).ToList();
     var inputs = fields.OfType<TextInput>().ToList();
+    var fileUrl = fields.OfType<FileUpload>().FirstOrDefault()?.Attachments.FirstOrDefault()?.Url;
     var priority = fields.OfType<StringMenu>().First().SelectedValues?.FirstOrDefault() switch
     {
         "no-rush" => TicketPriority.NoRush,
@@ -110,7 +112,7 @@ host.AddComponentInteraction<ModalInteractionContext>("modal-it-ticket", (ModalI
         _ => TicketPriority.Urgent,
     };
     return InteractionCallback.Message(
-        SaveTicket(c.User.ToString(), inputs[0].Value, inputs[1].Value, priority));
+        SaveTicket(c.User.ToString(), inputs[0].Value, inputs[1].Value, priority, fileUrl));
 });
 
 // Status buttons — customId: itstatus:<Status>:<ticketId> (no dashes — they're param separators!)
