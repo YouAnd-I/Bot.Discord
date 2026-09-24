@@ -1,26 +1,42 @@
+using Microsoft.Extensions.Hosting;
+
 using NetCord;
 using NetCord.Gateway;
-using NetCord.Logging;
+using NetCord.Hosting.Gateway;
+using NetCord.Hosting.Services.ApplicationCommands;
+using NetCord.Rest;
 
-var token = Environment.GetEnvironmentVariable("Discord__Token")
-    ?? throw new InvalidOperationException("Discord__Token environment variable is not set");
+var builder = Host.CreateApplicationBuilder(args);
 
-GatewayClient client = new(new BotToken(token), new GatewayClientConfiguration
+builder.Services
+    .AddDiscordGateway(options =>
+    {
+        options.Intents = GatewayIntents.GuildMessages
+                          | GatewayIntents.DirectMessages
+                          | GatewayIntents.MessageContent;
+    })
+    .AddGatewayHandlers(typeof(Program).Assembly)
+    .AddApplicationCommands();
+
+var host = builder.Build();
+
+host.AddSlashCommand("ping", "Ping pong!", () =>
+    InteractionCallback.Message(new InteractionMessageProperties
+    {
+        Content = "pong",
+        Flags = MessageFlags.Ephemeral,
+    }));
+
+await host.RunAsync();
+
+public class PingPongHandler(GatewayClient client) : IMessageCreateGatewayHandler
 {
-    Intents = GatewayIntents.GuildMessages
-              | GatewayIntents.DirectMessages
-              | GatewayIntents.MessageContent,
-    Logger = new ConsoleLogger(),
-});
+    public async ValueTask HandleAsync(Message message)
+    {
+        if (message.Author?.IsBot == true)
+            return;
 
-client.MessageCreate += async message =>
-{
-    if (message.Author?.IsBot == true)
-        return;
-
-    if (message.Content.Trim().Equals("ping", StringComparison.OrdinalIgnoreCase))
-        await client.Rest.SendMessageAsync(message.ChannelId, "pong");
-};
-
-await client.StartAsync();
-await Task.Delay(-1);
+        if (message.Content.Trim().Equals("ping", StringComparison.OrdinalIgnoreCase))
+            await client.Rest.SendMessageAsync(message.ChannelId, "pong");
+    }
+}
