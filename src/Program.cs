@@ -111,23 +111,56 @@ host.AddComponentInteraction<ModalInteractionContext>("modal-it-ticket", (ModalI
         SaveTicket(c.User.ToString(), inputs[0].Value, inputs[1].Value, priority));
 });
 
+// Status buttons — each carries the ticket id in its customId: it-status:<Status>:<ticketId>
+host.AddComponentInteraction<ButtonInteractionContext>("it-status",
+    (ButtonInteractionContext c, TicketStatus status, string ticketId) =>
+{
+    File.AppendAllText("it-tickets.txt",
+        $"[{DateTimeOffset.UtcNow:u}] user={c.User} ticket={ticketId} status={StatusName(status)}\n");
+    return InteractionCallback.ModifyMessage(m =>
+    {
+        m.Content = $"**IT ticket `{ticketId}`** — status updated to `{StatusName(status)}`";
+        m.Components = [];
+    });
+});
+
 static InteractionMessageProperties SaveTicket(
     string user, string? title, string? description, TicketPriority priority)
 {
-    var priorityName = priority switch
-    {
-        TicketPriority.NoRush => "no-rush",
-        TicketPriority.Report => "report",
-        _ => "urgent",
-    };
+    var ticketId = Guid.NewGuid().ToString("N")[..8];
     File.AppendAllText("it-tickets.txt",
-        $"[{DateTimeOffset.UtcNow:u}] user={user} priority={priorityName} | {title ?? "(no title)"} — {description}\n");
+        $"[{DateTimeOffset.UtcNow:u}] user={user} ticket={ticketId} priority={PriorityName(priority)} | {title ?? "(no title)"} — {description}\n");
     return new InteractionMessageProperties
     {
-        Content = $"**IT ticket created**\nTitle: **{title}**\nPriority: `{priorityName}`\n> {description}",
+        Content = $"**IT ticket `{ticketId}` created**\nTitle: **{title}**\nPriority: `{PriorityName(priority)}`\n> {description}\n\n*Set status:*",
         Flags = MessageFlags.Ephemeral,
+        Components =
+        [
+            new ActionRowProperties
+            {
+                new ButtonProperties($"it-status:Solved:{ticketId}", "Solved", ButtonStyle.Success),
+                new ButtonProperties($"it-status:NoVisit:{ticketId}", "No visit needed", ButtonStyle.Secondary),
+                new ButtonProperties($"it-status:Unresolved:{ticketId}", "Unresolved", ButtonStyle.Danger),
+                new ButtonProperties($"it-status:Planned:{ticketId}", "Planned for future", ButtonStyle.Primary),
+            },
+        ],
     };
 }
+
+static string PriorityName(TicketPriority p) => p switch
+{
+    TicketPriority.NoRush => "no-rush",
+    TicketPriority.Report => "report",
+    _ => "urgent",
+};
+
+static string StatusName(TicketStatus s) => s switch
+{
+    TicketStatus.NoVisit => "no-visit-needed",
+    TicketStatus.Unresolved => "unresolved",
+    TicketStatus.Planned => "planned-for-future",
+    _ => "solved",
+};
 
 // 8. Context-menu commands — right-click a user or a message
 host.AddUserCommand("User Info", (User user) =>
@@ -153,6 +186,8 @@ host.AddComponentInteraction<ModalInteractionContext>("modal-hello",
         c.Components.OfType<Label>().Select(l => l.Component).OfType<TextInput>().Select(i => i.Value)));
 
 await host.RunAsync();
+
+public enum TicketStatus { Solved, NoVisit, Unresolved, Planned }
 
 public enum TicketPriority
 {
