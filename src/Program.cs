@@ -73,7 +73,36 @@ host.AddSlashCommand("form", "Open a modal form", () =>
         new LabelProperties("Message", new TextInputProperties("text", TextInputStyle.Paragraph)),
     }));
 
-// 7. Context-menu commands — right-click a user or a message
+// 7. /it — IT ticket modal: description + priority dropdown, personal report, saved to txt
+host.AddSlashCommand("it", "Create an IT ticket", () =>
+    InteractionCallback.Modal(new ModalProperties("modal-it-ticket", "New IT Ticket")
+    {
+        new LabelProperties("Description", new TextInputProperties("description", TextInputStyle.Paragraph)),
+        new LabelProperties("Priority", new StringMenuProperties("priority")
+        {
+            new StringMenuSelectOptionProperties("Urgent", "urgent"),
+            new StringMenuSelectOptionProperties("No rush", "no-rush"),
+            new StringMenuSelectOptionProperties("Report", "report"),
+        }),
+    }));
+
+host.AddComponentInteraction<ModalInteractionContext>("modal-it-ticket", (ModalInteractionContext c) =>
+{
+    var fields = c.Components.OfType<Label>().Select(l => l.Component).ToList();
+    var description = fields.OfType<TextInput>().First().Value;
+    var priority = fields.OfType<StringMenu>().First().SelectedValues?.FirstOrDefault() ?? "unspecified";
+
+    var line = $"[{DateTimeOffset.UtcNow:u}] user={c.User} priority={priority} | {description}";
+    File.AppendAllText("it-tickets.txt", line + Environment.NewLine);
+
+    return (object)InteractionCallback.Message(new InteractionMessageProperties
+    {
+        Content = $"**IT ticket created**\nPriority: `{priority}`\n> {description}",
+        Flags = MessageFlags.Ephemeral,
+    });
+});
+
+// 8. Context-menu commands — right-click a user or a message
 host.AddUserCommand("User Info", (User user) =>
     InteractionCallback.Message(new InteractionMessageProperties
     {
