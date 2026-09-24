@@ -95,7 +95,7 @@ host.AddComponentInteraction<ModalInteractionContext>("modal-it-ticket", (ModalI
     var line = $"[{DateTimeOffset.UtcNow:u}] user={c.User} priority={priority} | {description}";
     File.AppendAllText("it-tickets.txt", line + Environment.NewLine);
 
-    return (object)InteractionCallback.Message(new InteractionMessageProperties
+    return InteractionCallback.Message(new InteractionMessageProperties
     {
         Content = $"**IT ticket created**\nPriority: `{priority}`\n> {description}",
         Flags = MessageFlags.Ephemeral,
