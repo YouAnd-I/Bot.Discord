@@ -5,6 +5,8 @@ using NetCord.Gateway;
 using NetCord.Hosting.Gateway;
 using NetCord.Hosting.Services.ApplicationCommands;
 using NetCord.Hosting.Services.ComponentInteractions;
+using System.Text.Json;
+
 using NetCord.Rest;
 using NetCord.Services.ApplicationCommands;
 using NetCord.Services.ComponentInteractions;
@@ -173,10 +175,13 @@ static InteractionMessageProperties SaveTicket(
     if (attachmentUrl is not null)
         content += $"\n📎 {attachmentUrl}";
 
-    var similar = TicketStore.Similar($"{title} {description}", excludeId: ticketId).Take(3).ToList();
-    if (similar.Count > 0)
-        content += "\n\n**Similar past tickets:**\n" +
-            string.Join('\n', similar.Select(t => $"- `{t.Id}` **{t.Title}** — {t.Desc}"));
+    var solution = TicketStore.BestSolution($"{title} {description}");
+    if (solution is not null)
+    {
+        content += $"\n\n**💡 IT solution — {solution.Title}:**\n{solution.Text}";
+        if (solution.Image is not null)
+            content += $"\n{solution.Image}";
+    }
 
     return new InteractionMessageProperties
     {
@@ -233,8 +238,16 @@ await host.RunAsync();
 public static class TicketStore
 {
     public const string FileName = "it-tickets.txt";
+    public const string Dir = "it-tickets";
 
     public record Ticket(string Id, string Title, string Desc);
+    public record Solution(string Title, string? Text, string? Image);
+
+    private static readonly JsonSerializerOptions JsonOpts = new()
+    {
+        WriteIndented = true,
+        PropertyNameCaseInsensitive = true,
+    };
 
     public static void Append(string user, string id, string priority,
         string? title, string? desc, string? file)
@@ -242,6 +255,50 @@ public static class TicketStore
         var line = $"[{DateTimeOffset.UtcNow:u}] user={user} ticket={id} priority={priority} | title={Clean(title) ?? "(no title)"} | desc={Clean(desc)}";
         if (file is not null) line += $" | file={file}";
         File.AppendAllText(FileName, line + '\n');
+
+        Directory.CreateDirectory(Dir);
+        File.WriteAllText($"{Dir}/{Slug(title)}-{id}.json",
+            JsonSerializer.Serialize(new
+            {
+                id, user,
+                created = DateTimeOffset.UtcNow.ToString("u"),
+                priority,
+                title,
+                description = desc,
+                file,
+                status = "open",
+            }, JsonOpts));
+    }
+
+    // Solutions written by IT as {slug}.s.json — { "title": "...", "text": "...", "image": "url" }
+    public static Solution? BestSolution(string? query)
+    {
+        var words = (query ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(w => w.Length > 1).ToArray();
+        if (words.Length == 0 || !Directory.Exists(Dir)) return null;
+
+        return Directory.EnumerateFiles(Dir, "*.s.json")
+            .Select(f =>
+            {
+                try { return JsonSerializer.Deserialize<Solution>(File.ReadAllText(f), JsonOpts); }
+                catch { return null; }
+            })
+            .Where(s => s is not null)
+            .Select(s => (s: s!, score: words.Count(w =>
+                s!.Title.Contains(w, StringComparison.OrdinalIgnoreCase) ||
+                (s.Text ?? "").Contains(w, StringComparison.OrdinalIgnoreCase))))
+            .Where(x => x.score > 0)
+            .OrderByDescending(x => x.score)
+            .Select(x => x.s)
+            .FirstOrDefault();
+    }
+
+    private static string Slug(string? title)
+    {
+        var s = string.Concat((title ?? "untitled").ToLowerInvariant().Trim()
+            .Select(c => char.IsLetterOrDigit(c) ? c : '-'));
+        while (s.Contains("--")) s = s.Replace("--", "-");
+        return s.Trim('-') is { Length: > 0 } x ? x : "untitled";
     }
 
     public static void AppendStatus(string user, string id, string status) =>
