@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "Bot.Discord": {
+      "commandName": "Project",
+      "dotnetRunMessages": true
+    }
+  }
+}
