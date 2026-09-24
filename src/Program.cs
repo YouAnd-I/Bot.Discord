@@ -76,7 +76,7 @@ host.AddSlashCommand("form", "Open a modal form", () =>
     }));
 
 // 7. /it — IT ticket. Bare /it → modal form. Any option → ticket created directly.
-host.AddSlashCommand("it", "Create an IT ticket", (
+host.AddSlashCommand("it", "Create an IT ticket", async (
     ApplicationCommandContext c,
     [SlashCommandParameter(Description = "Short summary — suggests similar past tickets",
                            AutocompleteProviderType = typeof(TicketAutocompleteProvider))] string? title = null,
@@ -85,8 +85,8 @@ host.AddSlashCommand("it", "Create an IT ticket", (
     [SlashCommandParameter(Description = "Attach a screenshot or file")] Attachment? attachment = null) =>
 {
     if (title is not null || description is not null || priority is not null || attachment is not null)
-        return (InteractionCallbackProperties)InteractionCallback.Message(SaveTicket(
-            c.User.ToString(), title, description, priority ?? TicketPriority.Urgent, attachment?.Url));
+        return (InteractionCallbackProperties)await SendTicketAsync(c.User,
+            c.Client.Rest, title, description, priority ?? TicketPriority.Urgent, attachment?.Url);
 
     return InteractionCallback.Modal(new ModalProperties("modal-it-ticket", "New IT Ticket")
     {
@@ -102,7 +102,7 @@ host.AddSlashCommand("it", "Create an IT ticket", (
     });
 });
 
-host.AddComponentInteraction<ModalInteractionContext>("modal-it-ticket", (ModalInteractionContext c) =>
+host.AddComponentInteraction<ModalInteractionContext>("modal-it-ticket", async (ModalInteractionContext c) =>
 {
     var fields = c.Components.OfType<Label>().Select(l => l.Component).ToList();
     var inputs = fields.OfType<TextInput>().ToList();
@@ -113,8 +113,7 @@ host.AddComponentInteraction<ModalInteractionContext>("modal-it-ticket", (ModalI
         "report" => TicketPriority.Report,
         _ => TicketPriority.Urgent,
     };
-    return InteractionCallback.Message(
-        SaveTicket(c.User.ToString(), inputs[0].Value, inputs[1].Value, priority, fileUrl));
+    return await SendTicketAsync(c.User, c.Client.Rest, inputs[0].Value, inputs[1].Value, priority, fileUrl);
 });
 
 // Status buttons — customId: itstatus:<Status>:<ticketId> (no dashes — they're param separators!)
@@ -139,6 +138,7 @@ host.AddComponentInteraction<ButtonInteractionContext>("itreport",
         new TextDisplayProperties("**This report is confidential** — it won't be shown publicly."),
         new LabelProperties("Your complaint", new TextInputProperties("complaint", TextInputStyle.Paragraph)),
         new LabelProperties("What action should have been taken?", new TextInputProperties("action", TextInputStyle.Paragraph)),
+        new LabelProperties("Evidence", new FileUploadProperties("reportfile") { Required = false, MaxValues = 1 }),
         new LabelProperties("Stay anonymous", new CheckboxProperties("anonymous") { Default = true })
         { Description = "We won't attach your name to this report" },
     }));
@@ -147,14 +147,14 @@ host.AddComponentInteraction<ModalInteractionContext>("reportmodal", (ModalInter
 {
     var fields = c.Components.OfType<Label>().Select(l => l.Component).ToList();
     var inputs = fields.OfType<TextInput>().ToList();
+    var fileUrl = fields.OfType<FileUpload>().FirstOrDefault()?.Attachments.FirstOrDefault()?.Url;
     var anonymous = fields.OfType<Checkbox>().FirstOrDefault()?.Checked ?? true;
-    TicketStore.AppendReport(c.User.ToString(), ticketId, inputs[0].Value, inputs[1].Value, anonymous);
+    TicketStore.AppendReport(c.User.ToString(), ticketId, inputs[0].Value, inputs[1].Value, anonymous, fileUrl);
     var age = TicketStore.Age(ticketId);
     return InteractionCallback.ModifyMessage(m =>
     {
         m.Content = $"**IT ticket `{ticketId}`** — status updated to `complete`" +
-            (age is null ? "" : $" (open for {FormatAge(age.Value)})") +
-            "\n*A confidential report was filed.*";
+            (age is null ? "" : $" (open for {FormatAge(age.Value)})");
         m.Components = [];
     });
 });
@@ -163,8 +163,36 @@ static string FormatAge(TimeSpan a) => a.TotalHours >= 1
     ? $"{(int)a.TotalHours}h {a.Minutes}m"
     : a.TotalMinutes >= 1 ? $"{(int)a.TotalMinutes}m" : $"{(int)a.TotalSeconds}s";
 
-static InteractionMessageProperties SaveTicket(
-    string user, string? title, string? description, TicketPriority priority, string? attachmentUrl = null)
+// Builds the ticket, DMs the full card to the user, replies with a short ephemeral ack
+static async Task<InteractionCallbackProperties> SendTicketAsync(
+    User user, RestClient rest, string? title, string? description,
+    TicketPriority priority, string? attachmentUrl)
+{
+    var (ticketId, content, buttons) = BuildTicket(
+        user.ToString(), title, description, priority, attachmentUrl);
+    try
+    {
+        var dm = await user.GetDMChannelAsync();
+        await rest.SendMessageAsync(dm.Id,
+            new MessageProperties { Content = content, Components = [buttons] });
+        return InteractionCallback.Message(new InteractionMessageProperties
+        {
+            Content = $"**IT ticket `{ticketId}` created** — sent to your DMs 📬",
+            Flags = MessageFlags.Ephemeral,
+        });
+    }
+    catch
+    {
+        // DMs closed — fall back to an ephemeral reply with the full card
+        return InteractionCallback.Message(new InteractionMessageProperties
+        {
+            Content = content, Flags = MessageFlags.Ephemeral, Components = [buttons],
+        });
+    }
+}
+
+static (string Id, string Content, ActionRowProperties Buttons) BuildTicket(
+    string user, string? title, string? description, TicketPriority priority, string? attachmentUrl)
 {
     var ticketId = Guid.NewGuid().ToString("N")[..8];
     TicketStore.Append(user, ticketId, PriorityName(priority), title, description, attachmentUrl);
@@ -183,21 +211,14 @@ static InteractionMessageProperties SaveTicket(
             content += $"\n{solution.Image}";
     }
 
-    return new InteractionMessageProperties
+    var buttons = new ActionRowProperties
     {
-        Content = content + "\n\n*Set status:*",
-        Flags = MessageFlags.Ephemeral,
-        Components =
-        [
-            new ActionRowProperties
-            {
-                new ButtonProperties($"itstatus:complete:{ticketId}", "Complete", ButtonStyle.Success),
-                new ButtonProperties($"itstatus:unsolved:{ticketId}", "UnSolved", ButtonStyle.Danger),
-                new ButtonProperties($"itstatus:planned:{ticketId}", "Planned for future", ButtonStyle.Primary),
-                new ButtonProperties($"itreport:{ticketId}", "Report", ButtonStyle.Secondary),
-            },
-        ],
+        new ButtonProperties($"itstatus:complete:{ticketId}", "Complete", ButtonStyle.Success),
+        new ButtonProperties($"itstatus:unsolved:{ticketId}", "UnSolved", ButtonStyle.Danger),
+        new ButtonProperties($"itstatus:planned:{ticketId}", "Planned for future", ButtonStyle.Primary),
+        new ButtonProperties($"itreport:{ticketId}", "Report", ButtonStyle.Secondary),
     };
+    return (ticketId, content + "\n\n*Set status:*", buttons);
 }
 
 static string PriorityName(TicketPriority p) => p switch
@@ -304,9 +325,11 @@ public static class TicketStore
     public static void AppendStatus(string user, string id, string status) =>
         File.AppendAllText(FileName, $"[{DateTimeOffset.UtcNow:u}] user={user} ticket={id} status={status}\n");
 
-    public static void AppendReport(string user, string id, string complaint, string action, bool anonymous) =>
+    public static void AppendReport(string user, string id, string complaint, string action,
+        bool anonymous, string? file) =>
         File.AppendAllText(FileName,
-            $"[{DateTimeOffset.UtcNow:u}] user={(anonymous ? "anonymous" : user)} ticket={id} report | complaint={Clean(complaint)} | action={Clean(action)}\n");
+            $"[{DateTimeOffset.UtcNow:u}] user={(anonymous ? "anonymous" : user)} ticket={id} report | complaint={Clean(complaint)} | action={Clean(action)}" +
+            (file is null ? "" : $" | file={file}") + "\n");
 
     // Time since the ticket's creation line
     public static TimeSpan? Age(string id)
