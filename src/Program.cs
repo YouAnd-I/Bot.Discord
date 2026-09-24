@@ -76,7 +76,7 @@ host.AddSlashCommand("form", "Open a modal form", () =>
     }));
 
 // 7. /it — IT ticket. Bare /it → modal form. Any option → ticket created directly.
-host.AddSlashCommand("it", "Create an IT ticket", async (
+host.AddSlashCommand("it", "Create an IT ticket", (
     ApplicationCommandContext c,
     [SlashCommandParameter(Description = "Short summary — suggests similar past tickets",
                            AutocompleteProviderType = typeof(TicketAutocompleteProvider))] string? title = null,
@@ -85,8 +85,12 @@ host.AddSlashCommand("it", "Create an IT ticket", async (
     [SlashCommandParameter(Description = "Attach a screenshot or file")] Attachment? attachment = null) =>
 {
     if (title is not null || description is not null || priority is not null || attachment is not null)
-        return (InteractionCallbackProperties)await SendTicketAsync(c.User,
-            c.Client.Rest, title, description, priority ?? TicketPriority.Urgent, attachment?.Url);
+    {
+        // Respond within 3s, finish the DM work in the background
+        _ = Task.Run(() => FinishTicketAsync(c.User, c.Client.Rest, c.Interaction,
+            title, description, priority ?? TicketPriority.Urgent, attachment?.Url));
+        return (InteractionCallbackProperties)InteractionCallback.DeferredMessage(MessageFlags.Ephemeral);
+    }
 
     return InteractionCallback.Modal(new ModalProperties("modal-it-ticket", "New IT Ticket")
     {
@@ -102,7 +106,7 @@ host.AddSlashCommand("it", "Create an IT ticket", async (
     });
 });
 
-host.AddComponentInteraction<ModalInteractionContext>("modal-it-ticket", async (ModalInteractionContext c) =>
+host.AddComponentInteraction<ModalInteractionContext>("modal-it-ticket", (ModalInteractionContext c) =>
 {
     var fields = c.Components.OfType<Label>().Select(l => l.Component).ToList();
     var inputs = fields.OfType<TextInput>().ToList();
@@ -113,7 +117,9 @@ host.AddComponentInteraction<ModalInteractionContext>("modal-it-ticket", async (
         "report" => TicketPriority.Report,
         _ => TicketPriority.Urgent,
     };
-    return await SendTicketAsync(c.User, c.Client.Rest, inputs[0].Value, inputs[1].Value, priority, fileUrl);
+    _ = Task.Run(() => FinishTicketAsync(c.User, c.Client.Rest, c.Interaction,
+        inputs[0].Value, inputs[1].Value, priority, fileUrl));
+    return InteractionCallback.DeferredMessage(MessageFlags.Ephemeral);
 });
 
 // Status buttons — customId: itstatus:<Status>:<ticketId> (no dashes — they're param separators!)
@@ -163,10 +169,10 @@ static string FormatAge(TimeSpan a) => a.TotalHours >= 1
     ? $"{(int)a.TotalHours}h {a.Minutes}m"
     : a.TotalMinutes >= 1 ? $"{(int)a.TotalMinutes}m" : $"{(int)a.TotalSeconds}s";
 
-// Builds the ticket, DMs the full card to the user, replies with a short ephemeral ack
-static async Task<InteractionCallbackProperties> SendTicketAsync(
-    User user, RestClient rest, string? title, string? description,
-    TicketPriority priority, string? attachmentUrl)
+// Runs after the deferred ack — DMs the full card, then follows up on the interaction
+static async Task FinishTicketAsync(
+    User user, RestClient rest, Interaction interaction,
+    string? title, string? description, TicketPriority priority, string? attachmentUrl)
 {
     var (ticketId, content, buttons) = BuildTicket(
         user.ToString(), title, description, priority, attachmentUrl);
@@ -175,19 +181,21 @@ static async Task<InteractionCallbackProperties> SendTicketAsync(
         var dm = await user.GetDMChannelAsync();
         await rest.SendMessageAsync(dm.Id,
             new MessageProperties { Content = content, Components = [buttons] });
-        return InteractionCallback.Message(new InteractionMessageProperties
-        {
-            Content = $"**IT ticket `{ticketId}` created** — sent to your DMs 📬",
-            Flags = MessageFlags.Ephemeral,
-        });
+        await rest.SendInteractionFollowupMessageAsync(interaction.ApplicationId, interaction.Token,
+            new InteractionMessageProperties
+            {
+                Content = $"**IT ticket `{ticketId}` created** — sent to your DMs 📬",
+                Flags = MessageFlags.Ephemeral,
+            });
     }
     catch
     {
-        // DMs closed — fall back to an ephemeral reply with the full card
-        return InteractionCallback.Message(new InteractionMessageProperties
-        {
-            Content = content, Flags = MessageFlags.Ephemeral, Components = [buttons],
-        });
+        // DMs closed — fall back to an ephemeral followup with the full card
+        await rest.SendInteractionFollowupMessageAsync(interaction.ApplicationId, interaction.Token,
+            new InteractionMessageProperties
+            {
+                Content = content, Flags = MessageFlags.Ephemeral, Components = [buttons],
+            });
     }
 }
 
