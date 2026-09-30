@@ -6,6 +6,7 @@ using NetCord.Hosting.Gateway;
 using NetCord.Hosting.Services.ApplicationCommands;
 using NetCord.Hosting.Services.ComponentInteractions;
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -331,7 +332,9 @@ static async Task<TicketPriority?> ClassifyAsync(HttpClient laya, string text)
     {
         try
         {
-            var res = await laya.PostAsJsonAsync("http://127.0.0.1:8399/classify", new { text });
+            var res = await laya.PostAsync("http://127.0.0.1:8399/classify",
+                new StringContent(JsonSerializer.Serialize(new { text }),
+                    Encoding.UTF8, "application/json"));
             var body = await res.Content.ReadAsStringAsync();
             if (res.IsSuccessStatusCode)
                 return JsonDocument.Parse(body).RootElement.GetProperty("priority").GetString() switch
