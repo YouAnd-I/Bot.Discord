@@ -7,6 +7,7 @@ using NetCord.Hosting.Services.ApplicationCommands;
 using NetCord.Hosting.Services.ComponentInteractions;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 using NetCord.Rest;
 using NetCord.Services.ApplicationCommands;
@@ -138,7 +139,42 @@ host.AddComponentInteraction<ButtonInteractionContext>("itstatus",
     {
         m.Content = $"**IT ticket `{ticketId}`** — status updated to `{status}`" +
             (age is null ? "" : $" (open for {FormatAge(age.Value)})");
-        m.Components = [];
+        m.Components = [FollowupRow(ticketId)];
+    });
+});
+
+// Reopen — back to the full status row, timer keeps counting from creation
+host.AddComponentInteraction<ButtonInteractionContext>("itreopen",
+    (ButtonInteractionContext c, string ticketId) =>
+{
+    TicketStore.AppendStatus(c.User.ToString(), ticketId, "reopened");
+    var age = TicketStore.Age(ticketId);
+    var created = age is null ? (DateTimeOffset?)null : DateTimeOffset.UtcNow - age.Value;
+    return InteractionCallback.ModifyMessage(m =>
+    {
+        m.Content = $"**IT ticket `{ticketId}`** — `reopened`" +
+            (created is null ? "" : $" — <t:{created.Value.ToUnixTimeSeconds()}:R>");
+        m.Components = [FullRow(ticketId)];
+    });
+});
+
+// Add note — small modal, appends to the log + ticket JSON
+host.AddComponentInteraction<ButtonInteractionContext>("itnote",
+    (ButtonInteractionContext c, string ticketId) =>
+    InteractionCallback.Modal(new ModalProperties($"notemodal:{ticketId}", $"Note on ticket {ticketId}")
+    {
+        new LabelProperties("Follow-up note", new TextInputProperties("note", TextInputStyle.Paragraph)),
+    }));
+
+host.AddComponentInteraction<ModalInteractionContext>("notemodal",
+    (ModalInteractionContext c, string ticketId) =>
+{
+    var note = c.Components.OfType<Label>().Select(l => l.Component).OfType<TextInput>().First().Value;
+    var count = TicketStore.AppendNote(c.User.ToString(), ticketId, note);
+    return InteractionCallback.ModifyMessage(m =>
+    {
+        m.Content = $"**IT ticket `{ticketId}`** — note #{count} added\n> {note}";
+        m.Components = [FollowupRow(ticketId)];
     });
 });
 
@@ -167,9 +203,25 @@ host.AddComponentInteraction<ModalInteractionContext>("reportmodal", (ModalInter
     {
         m.Content = $"**IT ticket `{ticketId}`** — status updated to `complete`" +
             (age is null ? "" : $" (open for {FormatAge(age.Value)})");
-        m.Components = [];
+        m.Components = [FollowupRow(ticketId)];
     });
 });
+
+static ActionRowProperties FullRow(string ticketId) => new()
+{
+    new ButtonProperties($"itstatus:cancel:{ticketId}", "Cancel", ButtonStyle.Secondary),
+    new ButtonProperties($"itstatus:complete:{ticketId}", "Complete", ButtonStyle.Success),
+    new ButtonProperties($"itstatus:unsolved:{ticketId}", "Unsolved", ButtonStyle.Danger),
+    new ButtonProperties($"itstatus:planned:{ticketId}", "Planned", ButtonStyle.Primary),
+    new ButtonProperties($"itreport:{ticketId}", "Report", ButtonStyle.Secondary),
+};
+
+static ActionRowProperties FollowupRow(string ticketId) => new()
+{
+    new ButtonProperties($"itreopen:{ticketId}", "Reopen", ButtonStyle.Primary),
+    new ButtonProperties($"itnote:{ticketId}", "Add note", ButtonStyle.Secondary),
+    new ButtonProperties($"itreport:{ticketId}", "Report", ButtonStyle.Secondary),
+};
 
 static string FormatAge(TimeSpan a) => a.TotalHours >= 1
     ? $"{(int)a.TotalHours}h {a.Minutes}m"
@@ -231,15 +283,7 @@ static (string Id, string Content, ActionRowProperties Buttons) BuildTicket(
             content += $"\n{solution.Image}";
     }
 
-    var buttons = new ActionRowProperties
-    {
-        new ButtonProperties($"itstatus:cancel:{ticketId}", "Cancel", ButtonStyle.Secondary),
-        new ButtonProperties($"itstatus:complete:{ticketId}", "Complete", ButtonStyle.Success),
-        new ButtonProperties($"itstatus:unsolved:{ticketId}", "Unsolved", ButtonStyle.Danger),
-        new ButtonProperties($"itstatus:planned:{ticketId}", "Planned", ButtonStyle.Primary),
-        new ButtonProperties($"itreport:{ticketId}", "Report", ButtonStyle.Secondary),
-    };
-    return (ticketId, content + "\n\n*Set status:*", buttons);
+    return (ticketId, content + "\n\n*Set status:*", FullRow(ticketId));
 }
 
 static string PriorityName(TicketPriority p) => p switch
@@ -367,8 +411,39 @@ public static class TicketStore
         return s.Trim('-') is { Length: > 0 } x ? x : "untitled";
     }
 
-    public static void AppendStatus(string user, string id, string status) =>
+    public static void AppendStatus(string user, string id, string status)
+    {
         File.AppendAllText(FileName, $"[{DateTimeOffset.UtcNow:u}] user={user} ticket={id} status={status}\n");
+        UpdateJson(id, n => n["status"] = status);
+    }
+
+    // Returns this ticket's note count after appending
+    public static int AppendNote(string user, string id, string note)
+    {
+        File.AppendAllText(FileName,
+            $"[{DateTimeOffset.UtcNow:u}] user={Clean(user)} ticket={id} | note={Clean(note)}\n");
+        UpdateJson(id, n =>
+        {
+            if (n["notes"] is not JsonArray notes) n["notes"] = notes = new JsonArray();
+            notes.Add(note);
+        });
+        return File.ReadLines(FileName)
+            .Count(l => l.Contains($"ticket={id} ") && l.Contains("| note="));
+    }
+
+    private static void UpdateJson(string id, Action<JsonNode> update)
+    {
+        if (!Directory.Exists(Dir)) return;
+        var path = Directory.EnumerateFiles(Dir, $"*-{id}.json").FirstOrDefault();
+        if (path is null) return;
+        try
+        {
+            var node = JsonNode.Parse(File.ReadAllText(path))!;
+            update(node);
+            File.WriteAllText(path, node.ToJsonString(JsonOpts));
+        }
+        catch { }
+    }
 
     public static void AppendReport(string user, string id, string complaint, string action,
         bool anonymous, string? file) =>
