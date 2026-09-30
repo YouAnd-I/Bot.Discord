@@ -98,8 +98,9 @@ host.AddSlashCommand("it", "Create an IT ticket", (
     return InteractionCallback.Modal(new ModalProperties("modal-it-ticket", "New IT Ticket")
     {
         new LabelProperties("Title", new TextInputProperties("title", TextInputStyle.Short)),
-        new LabelProperties("Description", new TextInputProperties("description", TextInputStyle.Paragraph)),
-        new LabelProperties("Priority", new StringMenuProperties("priority")
+        new LabelProperties("Description",
+            new TextInputProperties("description", TextInputStyle.Paragraph) { Required = false }),
+        new LabelProperties("Priority", new StringMenuProperties("priority") { Required = false }
         {
             new StringMenuSelectOptionProperties("Auto (let the model decide)", "auto") { Default = true },
             new StringMenuSelectOptionProperties("Urgent", "urgent"),
