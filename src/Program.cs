@@ -1,7 +1,7 @@
 using Microsoft.Extensions.Hosting;
 
 using NetCord;
-using NetCord.Gateway;
+
 using NetCord.Hosting.Gateway;
 using NetCord.Hosting.Services.ApplicationCommands;
 using NetCord.Hosting.Services.ComponentInteractions;
@@ -75,16 +75,17 @@ host.AddSlashCommand("form", "Open a modal form", () =>
         new LabelProperties("Message", new TextInputProperties("text", TextInputStyle.Paragraph)),
     }));
 
-// 7. /it — IT ticket. Bare /it → modal form. Any option → ticket created directly.
+// 7. /it — instant ticket with defaults. form:True → full modal instead.
 host.AddSlashCommand("it", "Create an IT ticket", (
     ApplicationCommandContext c,
     [SlashCommandParameter(Description = "Short summary — suggests similar past tickets",
                            AutocompleteProviderType = typeof(TicketAutocompleteProvider))] string? title = null,
     [SlashCommandParameter(Description = "What happened?")] string? description = null,
     [SlashCommandParameter(Description = "How urgent is it?")] TicketPriority? priority = null,
-    [SlashCommandParameter(Description = "Attach a screenshot or file")] Attachment? attachment = null) =>
+    [SlashCommandParameter(Description = "Attach a screenshot or file")] Attachment? attachment = null,
+    [SlashCommandParameter(Description = "Open the full form instead")] bool form = false) =>
 {
-    if (title is not null || description is not null || priority is not null || attachment is not null)
+    if (!form)
     {
         // Respond within 3s, finish the DM work in the background
         _ = Task.Run(() => FinishTicketAsync(c.User, c.Client.Rest, c.Interaction,
