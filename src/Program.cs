@@ -100,13 +100,13 @@ host.AddSlashCommand("it", "Create an IT ticket", (
         new LabelProperties("Title", new TextInputProperties("title", TextInputStyle.Short)),
         new LabelProperties("Description",
             new TextInputProperties("description", TextInputStyle.Paragraph) { Required = false }),
-        new LabelProperties("Priority", new StringMenuProperties("priority") { Required = false }
-        {
+        new LabelProperties("Priority", new StringMenuProperties("priority",
+        [
             new StringMenuSelectOptionProperties("Auto (let the model decide)", "auto") { Default = true },
             new StringMenuSelectOptionProperties("Urgent", "urgent"),
             new StringMenuSelectOptionProperties("No rush", "no-rush"),
             new StringMenuSelectOptionProperties("Report", "report"),
-        }),
+        ]) { Required = false }),
         new LabelProperties("Attachment", new FileUploadProperties("file") { Required = false, MaxValues = 1 }),
     });
 });
