@@ -5,6 +5,7 @@ using NetCord;
 using NetCord.Hosting.Gateway;
 using NetCord.Hosting.Services.ApplicationCommands;
 using NetCord.Hosting.Services.ComponentInteractions;
+using System.Net.Http.Json;
 using System.Text.Json;
 
 using NetCord.Rest;
@@ -21,6 +22,8 @@ builder.Services
     .AddComponentInteractions<ModalInteraction, ModalInteractionContext>();
 
 var host = builder.Build();
+
+var laya = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
 
 // 1. Slash command + ephemeral reply (only the caller sees it)
 host.AddSlashCommand("ping", "Ping pong!", () =>
@@ -88,8 +91,8 @@ host.AddSlashCommand("it", "Create an IT ticket", (
     if (!form)
     {
         // Respond within 3s, finish the DM work in the background
-        _ = Task.Run(() => FinishTicketAsync(c.User, c.Client.Rest, c.Interaction,
-            title, description, priority ?? TicketPriority.Urgent, attachment?.Url));
+        _ = Task.Run(() => FinishTicketAsync(c.User, c.Client.Rest, c.Interaction, laya,
+            title, description, priority ?? TicketPriority.Auto, attachment?.Url));
         return (InteractionCallbackProperties)InteractionCallback.DeferredMessage(MessageFlags.Ephemeral);
     }
 
@@ -99,7 +102,8 @@ host.AddSlashCommand("it", "Create an IT ticket", (
         new LabelProperties("Description", new TextInputProperties("description", TextInputStyle.Paragraph)),
         new LabelProperties("Priority", new StringMenuProperties("priority")
         {
-            new StringMenuSelectOptionProperties("Urgent", "urgent") { Default = true },
+            new StringMenuSelectOptionProperties("Auto (let the model decide)", "auto") { Default = true },
+            new StringMenuSelectOptionProperties("Urgent", "urgent"),
             new StringMenuSelectOptionProperties("No rush", "no-rush"),
             new StringMenuSelectOptionProperties("Report", "report"),
         }),
@@ -114,11 +118,12 @@ host.AddComponentInteraction<ModalInteractionContext>("modal-it-ticket", (ModalI
     var fileUrl = fields.OfType<FileUpload>().FirstOrDefault()?.Attachments.FirstOrDefault()?.Url;
     var priority = fields.OfType<StringMenu>().First().SelectedValues?.FirstOrDefault() switch
     {
+        "urgent" => TicketPriority.Urgent,
         "no-rush" => TicketPriority.NoRush,
         "report" => TicketPriority.Report,
-        _ => TicketPriority.Urgent,
+        _ => TicketPriority.Auto,
     };
-    _ = Task.Run(() => FinishTicketAsync(c.User, c.Client.Rest, c.Interaction,
+    _ = Task.Run(() => FinishTicketAsync(c.User, c.Client.Rest, c.Interaction, laya,
         inputs[0].Value, inputs[1].Value, priority, fileUrl));
     return InteractionCallback.DeferredMessage(MessageFlags.Ephemeral);
 });
@@ -172,11 +177,14 @@ static string FormatAge(TimeSpan a) => a.TotalHours >= 1
 
 // Runs after the deferred ack — DMs the full card, then follows up on the interaction
 static async Task FinishTicketAsync(
-    User user, RestClient rest, Interaction interaction,
+    User user, RestClient rest, Interaction interaction, HttpClient laya,
     string? title, string? description, TicketPriority priority, string? attachmentUrl)
 {
+    var resolved = priority == TicketPriority.Auto
+        ? await ClassifyAsync(laya, $"{title} {description}")
+        : priority;
     var (ticketId, content, buttons) = BuildTicket(
-        user.ToString(), title, description, priority, attachmentUrl);
+        user.ToString(), title, description, resolved, priority == TicketPriority.Auto, attachmentUrl);
     try
     {
         var dm = await user.GetDMChannelAsync();
@@ -201,14 +209,16 @@ static async Task FinishTicketAsync(
 }
 
 static (string Id, string Content, ActionRowProperties Buttons) BuildTicket(
-    string user, string? title, string? description, TicketPriority priority, string? attachmentUrl)
+    string user, string? title, string? description, TicketPriority priority,
+    bool auto, string? attachmentUrl)
 {
     var ticketId = Guid.NewGuid().ToString("N")[..8];
-    TicketStore.Append(user, ticketId, PriorityName(priority), title, description, attachmentUrl);
+    TicketStore.Append(user, ticketId, PriorityName(priority), auto, title, description, attachmentUrl);
 
     var created = DateTimeOffset.UtcNow;
     var content = $"**IT ticket `{ticketId}` created** — <t:{created.ToUnixTimeSeconds()}:R>\n" +
-        $"Title: **{title}**\nPriority: `{PriorityName(priority)}`\n> {description}";
+        $"Title: **{title}**\nPriority: `{PriorityName(priority)}`" +
+        (auto ? " *(auto-classified)*" : "") + $"\n> {description}";
     if (attachmentUrl is not null)
         content += $"\n📎 {attachmentUrl}";
 
@@ -222,9 +232,10 @@ static (string Id, string Content, ActionRowProperties Buttons) BuildTicket(
 
     var buttons = new ActionRowProperties
     {
+        new ButtonProperties($"itstatus:cancel:{ticketId}", "Cancel", ButtonStyle.Secondary),
         new ButtonProperties($"itstatus:complete:{ticketId}", "Complete", ButtonStyle.Success),
-        new ButtonProperties($"itstatus:unsolved:{ticketId}", "UnSolved", ButtonStyle.Danger),
-        new ButtonProperties($"itstatus:planned:{ticketId}", "Planned for future", ButtonStyle.Primary),
+        new ButtonProperties($"itstatus:unsolved:{ticketId}", "Unsolved", ButtonStyle.Danger),
+        new ButtonProperties($"itstatus:planned:{ticketId}", "Planned", ButtonStyle.Primary),
         new ButtonProperties($"itreport:{ticketId}", "Report", ButtonStyle.Secondary),
     };
     return (ticketId, content + "\n\n*Set status:*", buttons);
@@ -232,10 +243,29 @@ static (string Id, string Content, ActionRowProperties Buttons) BuildTicket(
 
 static string PriorityName(TicketPriority p) => p switch
 {
+    TicketPriority.Auto => "auto",
     TicketPriority.NoRush => "no-rush",
     TicketPriority.Report => "report",
     _ => "urgent",
 };
+
+// laya classifier — http://127.0.0.1:8399/classify, falls back to urgent if down
+static async Task<TicketPriority> ClassifyAsync(HttpClient laya, string text)
+{
+    try
+    {
+        var res = await laya.PostAsJsonAsync("http://127.0.0.1:8399/classify", new { text });
+        var priority = JsonDocument.Parse(await res.Content.ReadAsStringAsync())
+            .RootElement.GetProperty("priority").GetString();
+        return priority switch
+        {
+            "no-rush" => TicketPriority.NoRush,
+            "report" => TicketPriority.Report,
+            _ => TicketPriority.Urgent,
+        };
+    }
+    catch { return TicketPriority.Urgent; }
+}
 
 
 
@@ -279,10 +309,10 @@ public static class TicketStore
         PropertyNameCaseInsensitive = true,
     };
 
-    public static void Append(string user, string id, string priority,
+    public static void Append(string user, string id, string priority, bool auto,
         string? title, string? desc, string? file)
     {
-        var line = $"[{DateTimeOffset.UtcNow:u}] user={user} ticket={id} priority={priority} | title={Clean(title) ?? "(no title)"} | desc={Clean(desc)}";
+        var line = $"[{DateTimeOffset.UtcNow:u}] user={user} ticket={id} priority={priority}{(auto ? " auto" : "")} | title={Clean(title) ?? "(no title)"} | desc={Clean(desc)}";
         if (file is not null) line += $" | file={file}";
         File.AppendAllText(FileName, line + '\n');
 
@@ -394,6 +424,7 @@ public static class TicketStore
 
 public enum TicketPriority
 {
+    [SlashCommandChoice(Name = "auto")] Auto,
     [SlashCommandChoice(Name = "urgent")] Urgent,
     [SlashCommandChoice(Name = "no-rush")] NoRush,
     [SlashCommandChoice(Name = "report")] Report,
