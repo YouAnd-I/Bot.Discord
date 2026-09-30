@@ -239,15 +239,17 @@ static string Card(string ticketId, string status, bool liveTimer)
         t["description"]?.GetValue<string>(),
         t["priority"]?.GetValue<string>() ?? "urgent",
         t["auto"]?.GetValue<bool>() ?? false,
+        t["offline"]?.GetValue<bool>() ?? false,
         t["file"]?.GetValue<string>(),
         notes?.Count ?? 0);
 }
 
 static string CardBody(string? title, string? desc, string? priority,
-    bool auto, string? file, int noteCount = 0)
+    bool auto, bool offline, string? file, int noteCount = 0)
 {
     var body = $"Title: **{(string.IsNullOrWhiteSpace(title) ? "(no title)" : title)}**\n" +
-        $"Priority: `{priority}`" + (auto ? " *(auto-classified)*" : "") +
+        $"Priority: `{priority}`" +
+        (auto ? " *(auto-classified)*" : offline ? " *(classifier offline — defaulted)*" : "") +
         $"\n> {(string.IsNullOrWhiteSpace(desc) ? "(no description)" : desc)}";
     if (file is not null) body += $"\n📎 {file}";
     if (noteCount > 0) body += $"\n📝 {noteCount} note(s)";
@@ -270,11 +272,17 @@ static async Task FinishTicketAsync(
     User user, RestClient rest, Interaction interaction, HttpClient laya,
     string? title, string? description, TicketPriority priority, string? attachmentUrl)
 {
-    var resolved = priority == TicketPriority.Auto
-        ? await ClassifyAsync(laya, $"{title} {description}")
-        : priority;
+    var resolved = TicketPriority.Urgent;
+    var auto = false; var offline = false;
+    if (priority == TicketPriority.Auto)
+    {
+        var r = await ClassifyAsync(laya, $"{title} {description}");
+        if (r is null) offline = true;
+        else { resolved = r.Value; auto = true; }
+    }
+    else resolved = priority;
     var (ticketId, content, buttons) = BuildTicket(
-        user.ToString(), title, description, resolved, priority == TicketPriority.Auto, attachmentUrl);
+        user.ToString(), title, description, resolved, auto, offline, attachmentUrl);
     try
     {
         var dm = await user.GetDMChannelAsync();
@@ -300,10 +308,10 @@ static async Task FinishTicketAsync(
 
 static (string Id, string Content, ActionRowProperties Buttons) BuildTicket(
     string user, string? title, string? description, TicketPriority priority,
-    bool auto, string? attachmentUrl)
+    bool auto, bool offline, string? attachmentUrl)
 {
     var ticketId = Guid.NewGuid().ToString("N")[..8];
-    TicketStore.Append(user, ticketId, PriorityName(priority), auto, title, description, attachmentUrl);
+    TicketStore.Append(user, ticketId, PriorityName(priority), auto, offline, title, description, attachmentUrl);
     return (ticketId, Card(ticketId, "created", liveTimer: true), FullRow(ticketId));
 }
 
@@ -315,8 +323,8 @@ static string PriorityName(TicketPriority p) => p switch
     _ => "urgent",
 };
 
-// laya classifier — http://127.0.0.1:8399/classify, one retry, falls back to urgent
-static async Task<TicketPriority> ClassifyAsync(HttpClient laya, string text)
+// laya classifier — http://127.0.0.1:8399/classify, one retry, null = offline
+static async Task<TicketPriority?> ClassifyAsync(HttpClient laya, string text)
 {
     if (string.IsNullOrWhiteSpace(text)) return TicketPriority.NoRush;
     for (var attempt = 0; attempt < 2; attempt++)
@@ -340,7 +348,7 @@ static async Task<TicketPriority> ClassifyAsync(HttpClient laya, string text)
         }
         if (attempt == 0) await Task.Delay(1500);
     }
-    return TicketPriority.Urgent;
+    return null;
 }
 
 
@@ -385,10 +393,10 @@ public static class TicketStore
         PropertyNameCaseInsensitive = true,
     };
 
-    public static void Append(string user, string id, string priority, bool auto,
+    public static void Append(string user, string id, string priority, bool auto, bool offline,
         string? title, string? desc, string? file)
     {
-        var line = $"[{DateTimeOffset.UtcNow:u}] user={user} ticket={id} priority={priority}{(auto ? " auto" : "")} | title={Clean(title) ?? "(no title)"} | desc={Clean(desc)}";
+        var line = $"[{DateTimeOffset.UtcNow:u}] user={user} ticket={id} priority={priority}{(auto ? " auto" : "")}{(offline ? " classifier-offline" : "")} | title={Clean(title) ?? "(no title)"} | desc={Clean(desc)}";
         if (file is not null) line += $" | file={file}";
         File.AppendAllText(FileName, line + '\n');
 
@@ -400,6 +408,7 @@ public static class TicketStore
                 created = DateTimeOffset.UtcNow.ToString("u"),
                 priority,
                 auto,
+                offline,
                 title,
                 description = desc,
                 file,
