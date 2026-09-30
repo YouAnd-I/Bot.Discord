@@ -81,8 +81,7 @@ host.AddSlashCommand("form", "Open a modal form", () =>
 // 7. /it — instant ticket with defaults. form:True → full modal instead.
 host.AddSlashCommand("it", "Create an IT ticket", (
     ApplicationCommandContext c,
-    [SlashCommandParameter(Description = "Short summary — suggests similar past tickets",
-                           AutocompleteProviderType = typeof(TicketAutocompleteProvider))] string? title = null,
+    [SlashCommandParameter(Description = "Short summary")] string? title = null,
     [SlashCommandParameter(Description = "What happened?")] string? description = null,
     [SlashCommandParameter(Description = "How urgent is it?")] TicketPriority? priority = null,
     [SlashCommandParameter(Description = "Attach a screenshot or file")] Attachment? attachment = null) =>
@@ -434,20 +433,6 @@ public enum TicketPriority
     [SlashCommandChoice(Name = "urgent")] Urgent,
     [SlashCommandChoice(Name = "no-rush")] NoRush,
     [SlashCommandChoice(Name = "report")] Report,
-}
-
-public class TicketAutocompleteProvider : IAutocompleteProvider<AutocompleteInteractionContext>
-{
-    public ValueTask<IEnumerable<ApplicationCommandOptionChoiceProperties>?> GetChoicesAsync(
-        ApplicationCommandInteractionDataOption option, AutocompleteInteractionContext context)
-    {
-        var input = option.Value?.ToString() ?? "";
-        var titles = string.IsNullOrWhiteSpace(input)
-            ? TicketStore.Load().Select(t => t.Title).TakeLast(25)
-            : TicketStore.Similar(input).Select(t => t.Title);
-        return new(titles.Select(t => new ApplicationCommandOptionChoiceProperties(
-            t.Length > 100 ? t[..100] : t, t.Length > 100 ? t[..100] : t)));
-    }
 }
 
 public class FruitAutocompleteProvider : IAutocompleteProvider<AutocompleteInteractionContext>
