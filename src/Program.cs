@@ -299,27 +299,32 @@ static string PriorityName(TicketPriority p) => p switch
     _ => "urgent",
 };
 
-// laya classifier — http://127.0.0.1:8399/classify, falls back to urgent if down
+// laya classifier — http://127.0.0.1:8399/classify, one retry, falls back to urgent
 static async Task<TicketPriority> ClassifyAsync(HttpClient laya, string text)
 {
-    try
+    if (string.IsNullOrWhiteSpace(text)) return TicketPriority.NoRush;
+    for (var attempt = 0; attempt < 2; attempt++)
     {
-        if (string.IsNullOrWhiteSpace(text)) return TicketPriority.NoRush;
-        var res = await laya.PostAsJsonAsync("http://127.0.0.1:8399/classify", new { text });
-        var priority = JsonDocument.Parse(await res.Content.ReadAsStringAsync())
-            .RootElement.GetProperty("priority").GetString();
-        return priority switch
+        try
         {
-            "no-rush" => TicketPriority.NoRush,
-            "report" => TicketPriority.Report,
-            _ => TicketPriority.Urgent,
-        };
+            var res = await laya.PostAsJsonAsync("http://127.0.0.1:8399/classify", new { text });
+            var body = await res.Content.ReadAsStringAsync();
+            if (res.IsSuccessStatusCode)
+                return JsonDocument.Parse(body).RootElement.GetProperty("priority").GetString() switch
+                {
+                    "no-rush" => TicketPriority.NoRush,
+                    "report" => TicketPriority.Report,
+                    _ => TicketPriority.Urgent,
+                };
+            Console.WriteLine($"[laya] HTTP {(int)res.StatusCode}: {body}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[laya] classify failed: {ex.GetType().Name}: {ex.Message}");
+        }
+        if (attempt == 0) await Task.Delay(1500);
     }
-    catch (Exception ex)
-    {
-        Console.WriteLine($"[laya] classify failed: {ex.GetType().Name}: {ex.Message}");
-        return TicketPriority.Urgent;
-    }
+    return TicketPriority.Urgent;
 }
 
 
