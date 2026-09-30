@@ -85,10 +85,10 @@ host.AddSlashCommand("it", "Create an IT ticket", (
                            AutocompleteProviderType = typeof(TicketAutocompleteProvider))] string? title = null,
     [SlashCommandParameter(Description = "What happened?")] string? description = null,
     [SlashCommandParameter(Description = "How urgent is it?")] TicketPriority? priority = null,
-    [SlashCommandParameter(Description = "Attach a screenshot or file")] Attachment? attachment = null,
-    [SlashCommandParameter(Description = "Open the full form instead")] bool form = false) =>
+    [SlashCommandParameter(Description = "Attach a screenshot or file")] Attachment? attachment = null) =>
 {
-    if (!form)
+    // Bare /it → form. Any option → instant ticket.
+    if (title is not null || description is not null || priority is not null || attachment is not null)
     {
         // Respond within 3s, finish the DM work in the background
         _ = Task.Run(() => FinishTicketAsync(c.User, c.Client.Rest, c.Interaction, laya,
@@ -217,8 +217,9 @@ static (string Id, string Content, ActionRowProperties Buttons) BuildTicket(
 
     var created = DateTimeOffset.UtcNow;
     var content = $"**IT ticket `{ticketId}` created** — <t:{created.ToUnixTimeSeconds()}:R>\n" +
-        $"Title: **{title}**\nPriority: `{PriorityName(priority)}`" +
-        (auto ? " *(auto-classified)*" : "") + $"\n> {description}";
+        $"Title: **{(string.IsNullOrWhiteSpace(title) ? "(no title)" : title)}**\n" +
+        $"Priority: `{PriorityName(priority)}`" + (auto ? " *(auto-classified)*" : "") +
+        $"\n> {(string.IsNullOrWhiteSpace(description) ? "(no description)" : description)}";
     if (attachmentUrl is not null)
         content += $"\n📎 {attachmentUrl}";
 
@@ -254,6 +255,7 @@ static async Task<TicketPriority> ClassifyAsync(HttpClient laya, string text)
 {
     try
     {
+        if (string.IsNullOrWhiteSpace(text)) return TicketPriority.NoRush;
         var res = await laya.PostAsJsonAsync("http://127.0.0.1:8399/classify", new { text });
         var priority = JsonDocument.Parse(await res.Content.ReadAsStringAsync())
             .RootElement.GetProperty("priority").GetString();
@@ -264,7 +266,11 @@ static async Task<TicketPriority> ClassifyAsync(HttpClient laya, string text)
             _ => TicketPriority.Urgent,
         };
     }
-    catch { return TicketPriority.Urgent; }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[laya] classify failed: {ex.GetType().Name}: {ex.Message}");
+        return TicketPriority.Urgent;
+    }
 }
 
 
