@@ -136,11 +136,9 @@ host.AddComponentInteraction<ButtonInteractionContext>("itstatus",
     (ButtonInteractionContext c, string status, string ticketId) =>
 {
     TicketStore.AppendStatus(c.User.ToString(), ticketId, status);
-    var age = TicketStore.Age(ticketId);
     return InteractionCallback.ModifyMessage(m =>
     {
-        m.Content = $"**IT ticket `{ticketId}`** — status updated to `{status}`" +
-            (age is null ? "" : $" (open for {FormatAge(age.Value)})");
+        m.Content = Card(ticketId, $"status updated to `{status}`", liveTimer: false);
         m.Components = [FollowupRow(ticketId)];
     });
 });
@@ -150,12 +148,9 @@ host.AddComponentInteraction<ButtonInteractionContext>("itreopen",
     (ButtonInteractionContext c, string ticketId) =>
 {
     TicketStore.AppendStatus(c.User.ToString(), ticketId, "reopened");
-    var age = TicketStore.Age(ticketId);
-    var created = age is null ? (DateTimeOffset?)null : DateTimeOffset.UtcNow - age.Value;
     return InteractionCallback.ModifyMessage(m =>
     {
-        m.Content = $"**IT ticket `{ticketId}`** — `reopened`" +
-            (created is null ? "" : $" — <t:{created.Value.ToUnixTimeSeconds()}:R>");
+        m.Content = Card(ticketId, "`reopened`", liveTimer: true);
         m.Components = [FullRow(ticketId)];
     });
 });
@@ -176,7 +171,7 @@ host.AddComponentInteraction<ModalInteractionContext>("notemodal",
     var count = TicketStore.AppendNote(c.User.ToString(), ticketId, note);
     return InteractionCallback.ModifyMessage(m =>
     {
-        m.Content = $"**IT ticket `{ticketId}`** — note #{count} added\n> {note}";
+        m.Content = Card(ticketId, $"note #{count} added", liveTimer: true) + $"\n> {note}";
         m.Components = [FollowupRow(ticketId)];
     });
 });
@@ -203,11 +198,9 @@ host.AddComponentInteraction<ModalInteractionContext>("reportmodal", (ModalInter
     var anonymous = fields.OfType<Checkbox>().FirstOrDefault(f => f.CustomId == "anonymous")?.Checked ?? true;
     TicketStore.AppendReport(c.User.ToString(), ticketId, Text("complaint"), Text("action"), anonymous, fileUrl);
     TicketStore.AppendStatus(c.User.ToString(), ticketId, "complete"); // card says complete — persist it
-    var age = TicketStore.Age(ticketId);
     return InteractionCallback.ModifyMessage(m =>
     {
-        m.Content = $"**IT ticket `{ticketId}`** — status updated to `complete`" +
-            (age is null ? "" : $" (open for {FormatAge(age.Value)})");
+        m.Content = Card(ticketId, "status updated to `complete`", liveTimer: false);
         m.Components = [FollowupRow(ticketId)];
     });
 });
@@ -227,6 +220,46 @@ static ActionRowProperties FollowupRow(string ticketId) => new()
     new ButtonProperties($"itnote:{ticketId}", "Add note", ButtonStyle.Secondary),
     new ButtonProperties($"itreport:{ticketId}", "Report", ButtonStyle.Secondary),
 };
+
+// Full card for updates — status line on top, all stored ticket data below
+static string Card(string ticketId, string status, bool liveTimer)
+{
+    var age = TicketStore.Age(ticketId);
+    var header = $"**IT ticket `{ticketId}`** — {status}";
+    if (liveTimer && age is not null)
+        header += $" — <t:{(DateTimeOffset.UtcNow - age.Value).ToUnixTimeSeconds()}:R>";
+    else if (age is not null)
+        header += $" (open for {FormatAge(age.Value)})";
+
+    var t = TicketStore.LoadJson(ticketId);
+    if (t is null) return header;
+    var notes = t["notes"] as JsonArray;
+    return header + "\n" + CardBody(
+        t["title"]?.GetValue<string>(),
+        t["description"]?.GetValue<string>(),
+        t["priority"]?.GetValue<string>() ?? "urgent",
+        t["auto"]?.GetValue<bool>() ?? false,
+        t["file"]?.GetValue<string>(),
+        notes?.Count ?? 0);
+}
+
+static string CardBody(string? title, string? desc, string? priority,
+    bool auto, string? file, int noteCount = 0)
+{
+    var body = $"Title: **{(string.IsNullOrWhiteSpace(title) ? "(no title)" : title)}**\n" +
+        $"Priority: `{priority}`" + (auto ? " *(auto-classified)*" : "") +
+        $"\n> {(string.IsNullOrWhiteSpace(desc) ? "(no description)" : desc)}";
+    if (file is not null) body += $"\n📎 {file}";
+    if (noteCount > 0) body += $"\n📝 {noteCount} note(s)";
+
+    var solution = TicketStore.BestSolution($"{title} {desc}");
+    if (solution is not null)
+    {
+        body += $"\n\n**💡 IT solution — {solution.Title}:**\n{solution.Text}";
+        if (solution.Image is not null) body += $"\n{solution.Image}";
+    }
+    return body;
+}
 
 static string FormatAge(TimeSpan a) => a.TotalHours >= 1
     ? $"{(int)a.TotalHours}h {a.Minutes}m"
@@ -271,24 +304,7 @@ static (string Id, string Content, ActionRowProperties Buttons) BuildTicket(
 {
     var ticketId = Guid.NewGuid().ToString("N")[..8];
     TicketStore.Append(user, ticketId, PriorityName(priority), auto, title, description, attachmentUrl);
-
-    var created = DateTimeOffset.UtcNow;
-    var content = $"**IT ticket `{ticketId}` created** — <t:{created.ToUnixTimeSeconds()}:R>\n" +
-        $"Title: **{(string.IsNullOrWhiteSpace(title) ? "(no title)" : title)}**\n" +
-        $"Priority: `{PriorityName(priority)}`" + (auto ? " *(auto-classified)*" : "") +
-        $"\n> {(string.IsNullOrWhiteSpace(description) ? "(no description)" : description)}";
-    if (attachmentUrl is not null)
-        content += $"\n📎 {attachmentUrl}";
-
-    var solution = TicketStore.BestSolution($"{title} {description}");
-    if (solution is not null)
-    {
-        content += $"\n\n**💡 IT solution — {solution.Title}:**\n{solution.Text}";
-        if (solution.Image is not null)
-            content += $"\n{solution.Image}";
-    }
-
-    return (ticketId, content + "\n\n*Set status:*", FullRow(ticketId));
+    return (ticketId, Card(ticketId, "created", liveTimer: true), FullRow(ticketId));
 }
 
 static string PriorityName(TicketPriority p) => p switch
@@ -383,11 +399,21 @@ public static class TicketStore
                 id, user,
                 created = DateTimeOffset.UtcNow.ToString("u"),
                 priority,
+                auto,
                 title,
                 description = desc,
                 file,
                 status = "open",
             }, JsonOpts));
+    }
+
+    public static JsonNode? LoadJson(string id)
+    {
+        if (!Directory.Exists(Dir)) return null;
+        var path = Directory.EnumerateFiles(Dir, $"*-{id}.json").FirstOrDefault();
+        if (path is null) return null;
+        try { return JsonNode.Parse(File.ReadAllText(path)); }
+        catch { return null; }
     }
 
     // Solutions written by IT as {slug}.s.json — { "title": "...", "text": "...", "image": "url" }
