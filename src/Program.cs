@@ -115,9 +115,11 @@ host.AddSlashCommand("it", "Create an IT ticket", (
 host.AddComponentInteraction<ModalInteractionContext>("modal-it-ticket", (ModalInteractionContext c) =>
 {
     var fields = c.Components.OfType<Label>().Select(l => l.Component).ToList();
-    var inputs = fields.OfType<TextInput>().ToList();
-    var fileUrl = fields.OfType<FileUpload>().FirstOrDefault()?.Attachments.FirstOrDefault()?.Url;
-    var priority = fields.OfType<StringMenu>().First().SelectedValues?.FirstOrDefault() switch
+    string? Text(string id) => fields.OfType<TextInput>().FirstOrDefault(i => i.CustomId == id)?.Value;
+    var fileUrl = fields.OfType<FileUpload>().FirstOrDefault(f => f.CustomId == "file")
+        ?.Attachments.FirstOrDefault()?.Url;
+    var priority = fields.OfType<StringMenu>().FirstOrDefault(m => m.CustomId == "priority")
+        ?.SelectedValues?.FirstOrDefault() switch
     {
         "urgent" => TicketPriority.Urgent,
         "no-rush" => TicketPriority.NoRush,
@@ -125,7 +127,7 @@ host.AddComponentInteraction<ModalInteractionContext>("modal-it-ticket", (ModalI
         _ => TicketPriority.Auto,
     };
     _ = Task.Run(() => FinishTicketAsync(c.User, c.Client.Rest, c.Interaction, laya,
-        inputs[0].Value, inputs[1].Value, priority, fileUrl));
+        Text("title"), Text("description"), priority, fileUrl));
     return InteractionCallback.DeferredMessage(MessageFlags.Ephemeral);
 });
 
@@ -169,7 +171,8 @@ host.AddComponentInteraction<ButtonInteractionContext>("itnote",
 host.AddComponentInteraction<ModalInteractionContext>("notemodal",
     (ModalInteractionContext c, string ticketId) =>
 {
-    var note = c.Components.OfType<Label>().Select(l => l.Component).OfType<TextInput>().First().Value;
+    var note = c.Components.OfType<Label>().Select(l => l.Component)
+        .OfType<TextInput>().First(i => i.CustomId == "note").Value;
     var count = TicketStore.AppendNote(c.User.ToString(), ticketId, note);
     return InteractionCallback.ModifyMessage(m =>
     {
@@ -194,10 +197,12 @@ host.AddComponentInteraction<ButtonInteractionContext>("itreport",
 host.AddComponentInteraction<ModalInteractionContext>("reportmodal", (ModalInteractionContext c, string ticketId) =>
 {
     var fields = c.Components.OfType<Label>().Select(l => l.Component).ToList();
-    var inputs = fields.OfType<TextInput>().ToList();
-    var fileUrl = fields.OfType<FileUpload>().FirstOrDefault()?.Attachments.FirstOrDefault()?.Url;
-    var anonymous = fields.OfType<Checkbox>().FirstOrDefault()?.Checked ?? true;
-    TicketStore.AppendReport(c.User.ToString(), ticketId, inputs[0].Value, inputs[1].Value, anonymous, fileUrl);
+    string Text(string id) => fields.OfType<TextInput>().FirstOrDefault(i => i.CustomId == id)?.Value ?? "";
+    var fileUrl = fields.OfType<FileUpload>().FirstOrDefault(f => f.CustomId == "reportfile")
+        ?.Attachments.FirstOrDefault()?.Url;
+    var anonymous = fields.OfType<Checkbox>().FirstOrDefault(f => f.CustomId == "anonymous")?.Checked ?? true;
+    TicketStore.AppendReport(c.User.ToString(), ticketId, Text("complaint"), Text("action"), anonymous, fileUrl);
+    TicketStore.AppendStatus(c.User.ToString(), ticketId, "complete"); // card says complete — persist it
     var age = TicketStore.Age(ticketId);
     return InteractionCallback.ModifyMessage(m =>
     {
