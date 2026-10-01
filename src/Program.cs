@@ -27,6 +27,10 @@ var host = builder.Build();
 
 var laya = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
 
+// Default ticket assignee — Discord user snowflake via Discord__ItUser env
+var itUserId = ulong.TryParse(
+    Environment.GetEnvironmentVariable("Discord__ItUser"), out var u) ? u : (ulong?)null;
+
 // 1. Slash command + ephemeral reply (only the caller sees it)
 host.AddSlashCommand("ping", "Ping pong!", () =>
     InteractionCallback.Message(new InteractionMessageProperties
@@ -86,14 +90,15 @@ host.AddSlashCommand("it", "Create an IT ticket", (
     [SlashCommandParameter(Description = "Short summary")] string? title = null,
     [SlashCommandParameter(Description = "What happened?")] string? description = null,
     [SlashCommandParameter(Description = "How urgent is it?")] TicketPriority? priority = null,
-    [SlashCommandParameter(Description = "Attach a screenshot or file")] Attachment? attachment = null) =>
+    [SlashCommandParameter(Description = "Attach a screenshot or file")] Attachment? attachment = null,
+    [SlashCommandParameter(Description = "Who should handle this (defaults to on-call IT)")] User? assignee = null) =>
 {
     // Bare /it → form. Any option → instant ticket.
-    if (title is not null || description is not null || priority is not null || attachment is not null)
+    if (title is not null || description is not null || priority is not null || attachment is not null || assignee is not null)
     {
         // Respond within 3s, finish the DM work in the background
         _ = Task.Run(() => FinishTicketAsync(c.User, c.Client.Rest, c.Interaction, laya,
-            title, description, priority ?? TicketPriority.Auto, attachment?.Url));
+            title, description, priority ?? TicketPriority.Auto, attachment?.Url, assignee?.Id ?? itUserId));
         return (InteractionCallbackProperties)InteractionCallback.DeferredMessage(MessageFlags.Ephemeral);
     }
 
@@ -128,7 +133,7 @@ host.AddComponentInteraction<ModalInteractionContext>("modal-it-ticket", (ModalI
         _ => TicketPriority.Auto,
     };
     _ = Task.Run(() => FinishTicketAsync(c.User, c.Client.Rest, c.Interaction, laya,
-        Text("title"), Text("description"), priority, fileUrl));
+        Text("title"), Text("description"), priority, fileUrl, itUserId));
     return InteractionCallback.DeferredMessage(MessageFlags.Ephemeral);
 });
 
@@ -242,16 +247,18 @@ static string Card(string ticketId, string status, bool liveTimer)
         t["auto"]?.GetValue<bool>() ?? false,
         t["offline"]?.GetValue<bool>() ?? false,
         t["file"]?.GetValue<string>(),
+        t["assigned"]?.GetValue<string>(),
         notes?.Count ?? 0);
 }
 
 static string CardBody(string? title, string? desc, string? priority,
-    bool auto, bool offline, string? file, int noteCount = 0)
+    bool auto, bool offline, string? file, string? assigned, int noteCount = 0)
 {
     var body = $"Title: **{(string.IsNullOrWhiteSpace(title) ? "(no title)" : title)}**\n" +
         $"Priority: `{priority}`" +
         (auto ? " *(auto-classified)*" : offline ? " *(classifier offline — defaulted)*" : "") +
         $"\n> {(string.IsNullOrWhiteSpace(desc) ? "(no description)" : desc)}";
+    if (assigned is not null) body += $"\n👤 Handled by <@{assigned}>";
     if (file is not null) body += $"\n📎 {file}";
     if (noteCount > 0) body += $"\n📝 {noteCount} note(s)";
 
@@ -271,7 +278,8 @@ static string FormatAge(TimeSpan a) => a.TotalHours >= 1
 // Runs after the deferred ack — DMs the full card, then follows up on the interaction
 static async Task FinishTicketAsync(
     User user, RestClient rest, Interaction interaction, HttpClient laya,
-    string? title, string? description, TicketPriority priority, string? attachmentUrl)
+    string? title, string? description, TicketPriority priority, string? attachmentUrl,
+    ulong? assigneeId)
 {
     var resolved = TicketPriority.Urgent;
     var auto = false; var offline = false;
@@ -283,7 +291,7 @@ static async Task FinishTicketAsync(
     }
     else resolved = priority;
     var (ticketId, content, buttons) = BuildTicket(
-        user.ToString(), title, description, resolved, auto, offline, attachmentUrl);
+        user.ToString(), title, description, resolved, auto, offline, attachmentUrl, assigneeId);
     try
     {
         var dm = await user.GetDMChannelAsync();
@@ -305,14 +313,34 @@ static async Task FinishTicketAsync(
                 Content = content, Flags = MessageFlags.Ephemeral, Components = [buttons],
             });
     }
+
+    // Notify the assignee — they get a working copy of the card in their DMs
+    if (assigneeId is not null && assigneeId != user.Id)
+    {
+        try
+        {
+            var it = await rest.GetUserAsync(assigneeId.Value);
+            var itDm = await it.GetDMChannelAsync();
+            await rest.SendMessageAsync(itDm.Id, new MessageProperties
+            {
+                Content = $"**Ticket `{ticketId}` assigned to you** — from {user}\n" + content,
+                Components = [buttons],
+            });
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[assign] notify failed: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
 }
 
 static (string Id, string Content, ActionRowProperties Buttons) BuildTicket(
     string user, string? title, string? description, TicketPriority priority,
-    bool auto, bool offline, string? attachmentUrl)
+    bool auto, bool offline, string? attachmentUrl, ulong? assigneeId)
 {
     var ticketId = Guid.NewGuid().ToString("N")[..8];
-    TicketStore.Append(user, ticketId, PriorityName(priority), auto, offline, title, description, attachmentUrl);
+    TicketStore.Append(user, ticketId, PriorityName(priority), auto, offline,
+        title, description, attachmentUrl, assigneeId?.ToString());
     return (ticketId, Card(ticketId, "created", liveTimer: true), FullRow(ticketId));
 }
 
@@ -397,10 +425,11 @@ public static class TicketStore
     };
 
     public static void Append(string user, string id, string priority, bool auto, bool offline,
-        string? title, string? desc, string? file)
+        string? title, string? desc, string? file, string? assigned)
     {
         var line = $"[{DateTimeOffset.UtcNow:u}] user={user} ticket={id} priority={priority}{(auto ? " auto" : "")}{(offline ? " classifier-offline" : "")} | title={Clean(title) ?? "(no title)"} | desc={Clean(desc)}";
         if (file is not null) line += $" | file={file}";
+        if (assigned is not null) line += $" | assigned={assigned}";
         File.AppendAllText(FileName, line + '\n');
 
         Directory.CreateDirectory(Dir);
@@ -412,6 +441,7 @@ public static class TicketStore
                 priority,
                 auto,
                 offline,
+                assigned,
                 title,
                 description = desc,
                 file,
