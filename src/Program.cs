@@ -1,3 +1,4 @@
+using Discord.Greet.System.NetCord;
 using Discord.Ping.System.NetCord;
 using Frent;
 using Microsoft.Extensions.Hosting;
@@ -38,8 +39,7 @@ var itUserId = ulong.TryParse(
 host.AddPing(world);
 
 // 2. Typed options — delegate params become Discord options
-host.AddSlashCommand("greet", "Greet someone!", (User user, string message) =>
-    $"{message}, {user}!");
+host.AddGreet(world);
 
 // 3. Subcommand group — /tools square, /tools echo
 host.AddSlashCommandGroup("tools", "Utility commands", group =>

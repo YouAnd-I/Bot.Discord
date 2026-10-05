@@ -17,6 +17,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\..\Project\CS\Discord.Greet.System.NetCord\src\Discord.Greet.System.NetCord.csproj" />
     <ProjectReference Include="..\..\..\Project\CS\Discord.Ping.System.NetCord\src\Discord.Ping.System.NetCord.csproj" />
   </ItemGroup>
 
