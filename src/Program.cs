@@ -1,3 +1,5 @@
+using Discord.Ping.System.NetCord;
+using Frent;
 using Microsoft.Extensions.Hosting;
 
 using NetCord;
@@ -24,6 +26,7 @@ builder.Services
     .AddComponentInteractions<ModalInteraction, ModalInteractionContext>();
 
 var host = builder.Build();
+var world = new World();
 
 var laya = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
 
@@ -32,12 +35,7 @@ var itUserId = ulong.TryParse(
     Environment.GetEnvironmentVariable("Discord__ItUser"), out var u) ? u : (ulong?)null;
 
 // 1. Slash command + ephemeral reply (only the caller sees it)
-host.AddSlashCommand("ping", "Ping pong!", () =>
-    InteractionCallback.Message(new InteractionMessageProperties
-    {
-        Content = "pong",
-        Flags = MessageFlags.Ephemeral,
-    }));
+host.AddPing(world);
 
 // 2. Typed options — delegate params become Discord options
 host.AddSlashCommand("greet", "Greet someone!", (User user, string message) =>

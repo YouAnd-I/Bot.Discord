@@ -8,11 +8,16 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Frent" Version="0.8.0-beta" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.12" />
     <PackageReference Include="NetCord" Version="1.0.0-beta.22" />
     <PackageReference Include="NetCord.Hosting" Version="1.0.0-beta.22" />
     <PackageReference Include="NetCord.Hosting.Services" Version="1.0.0-beta.22" />
     <PackageReference Include="NetCord.Services" Version="1.0.0-beta.22" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\Project\CS\Discord.Ping.System.NetCord\src\Discord.Ping.System.NetCord.csproj" />
   </ItemGroup>
 
 </Project>
