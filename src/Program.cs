@@ -7,6 +7,7 @@ using Microsoft.Extensions.Hosting;
 using Ping.Adapter.NetCord;
 using Ping.System.Frent;
 using Ticket.Adapter.Cloudflare;
+using Ticket.Adapter.Npgsql;
 using Ticket.Adapter.NetCord;
 using Ticket.Data;
 using Ticket.System.Frent;
@@ -23,7 +24,28 @@ using NetCord.Services.ComponentInteractions;
 
 var builder = Host.CreateApplicationBuilder(args);
 
-var tickets = new TicketSystem(TicketStore.Default);
+// Storage: Postgres (Neon) when configured, the file store otherwise. The
+// import reads the file store's it-tickets.txt once; after that Postgres is
+// the record and the files are no longer written.
+ITicketStore store = TicketStore.Default;
+NpgsqlInteractions? interactions = null;
+if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("Postgres__ConnectionString")))
+{
+    var postgres = Environment.GetEnvironmentVariable("Postgres__ConnectionString")!;
+    var pgStore = new NpgsqlTicketStore(postgres);
+    pgStore.ImportLegacyLog(".");   // no-op once Postgres holds tickets
+    pgStore.SyncSolutions(".");     // *.s.json stay hand-authored; mirrored into Postgres
+    store = pgStore;
+    interactions = new NpgsqlInteractions(postgres);
+
+    // Finds InteractionAuditHandler: one row in Postgres per Discord interaction.
+    builder.Services.AddSingleton(interactions);
+    builder.Services.AddGatewayHandlers(typeof(Program).Assembly);
+}
+
+// The game: one world and its rules, ticking on its own thread.
+// Everything below only sees it as IWorldClient.
+var tickets = new TicketSystem(store);
 var world = new FrentWorldLoop(new World(), PingSystem.Execute, GreetSystem.Execute, tickets.Execute);
 world.AddNotificationDelivery<PriorityClassifyRequested>();
 builder.Services.AddHostedService(_ => new WorldTicker(world));
