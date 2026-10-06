@@ -25,6 +25,7 @@
     <ProjectReference Include="..\..\..\Project\CS\Ticket.Adapter.Cloudflare\src\Ticket.Adapter.Cloudflare.csproj" />
     <ProjectReference Include="..\..\..\Project\CS\Ticket.Adapter.Npgsql\src\Ticket.Adapter.Npgsql.csproj" />
     <ProjectReference Include="..\..\..\Project\CS\Ticket.Adapter.NetCord\src\Ticket.Adapter.NetCord.csproj" />
+    <ProjectReference Include="..\..\..\Project\CS\Ticket.Adapter.Sheets\src\Ticket.Adapter.Sheets.csproj" />
     <ProjectReference Include="..\..\..\Project\CS\Ticket.System.Frent\src\Ticket.System.Frent.csproj" />
   </ItemGroup>
 

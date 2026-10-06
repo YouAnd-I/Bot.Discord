@@ -9,6 +9,7 @@ using Ping.System.Frent;
 using Ticket.Adapter.Cloudflare;
 using Ticket.Adapter.Npgsql;
 using Ticket.Adapter.NetCord;
+using Ticket.Adapter.Sheets;
 using Ticket.Data;
 using Ticket.System.Frent;
 
@@ -42,6 +43,10 @@ if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("Postgres__Con
     builder.Services.AddSingleton(interactions);
     builder.Services.AddGatewayHandlers(typeof(Program).Assembly);
 }
+
+// Mirrors every Postgres table into a Google Sheet, one tab per table.
+if (SheetsOptions.FromEnvironment() is { } sheetsOptions)
+    builder.Services.AddHostedService(_ => new SheetsSyncService(sheetsOptions));
 
 // The game: one world and its rules, ticking on its own thread.
 // Everything below only sees it as IWorldClient.
