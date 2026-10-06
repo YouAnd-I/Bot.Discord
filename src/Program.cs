@@ -6,7 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Ping.Adapter.NetCord;
 using Ping.System.Frent;
-using Ticket.Adapter.Laya;
+using Ticket.Adapter.Cloudflare;
 using Ticket.Adapter.NetCord;
 using Ticket.Data;
 using Ticket.System.Frent;
@@ -27,7 +27,7 @@ var builder = Host.CreateApplicationBuilder(args);
 // Everything below only sees it as IWorldClient.
 var tickets = new TicketSystem(TicketStore.Default);
 var world = new FrentWorldLoop(new World(), PingSystem.Execute, GreetSystem.Execute, tickets.Execute);
-world.AddNotificationDelivery<PriorityClassifyRequested>(); // TicketSystem → laya adapter
+world.AddNotificationDelivery<PriorityClassifyRequested>(); // TicketSystem → classifier adapter
 builder.Services.AddHostedService(_ => new WorldTicker(world));
 
 builder.Services
@@ -46,9 +46,11 @@ host.AddPing(world);
 host.AddGreet(world);
 
 // 3. IT tickets: /it, its modal, and the card buttons — all through the world.
-//    The laya classifier is an adapter too: the world asks it for priorities.
+//    The Cloudflare (Workers AI clef) classifier is an adapter too: the world
+//    asks it for priorities. Needs Cloudflare__AccountId/Cloudflare__ApiToken;
+//    without them tickets still open, just urgent and marked offline.
 host.AddItTickets(world);
-world.AddLayaClassifier();
+world.AddCloudflareClassifier();
 
 // 4. Subcommand group — /tools square, /tools echo
 host.AddSlashCommandGroup("tools", "Utility commands", group =>

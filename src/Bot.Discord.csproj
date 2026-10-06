@@ -22,7 +22,7 @@
     <ProjectReference Include="..\..\..\Project\CS\Greet.System.Frent\src\Greet.System.Frent.csproj" />
     <ProjectReference Include="..\..\..\Project\CS\Ping.Adapter.NetCord\src\Ping.Adapter.NetCord.csproj" />
     <ProjectReference Include="..\..\..\Project\CS\Ping.System.Frent\src\Ping.System.Frent.csproj" />
-    <ProjectReference Include="..\..\..\Project\CS\Ticket.Adapter.Laya\src\Ticket.Adapter.Laya.csproj" />
+    <ProjectReference Include="..\..\..\Project\CS\Ticket.Adapter.Cloudflare\src\Ticket.Adapter.Cloudflare.csproj" />
     <ProjectReference Include="..\..\..\Project\CS\Ticket.Adapter.NetCord\src\Ticket.Adapter.NetCord.csproj" />
     <ProjectReference Include="..\..\..\Project\CS\Ticket.System.Frent\src\Ticket.System.Frent.csproj" />
   </ItemGroup>
