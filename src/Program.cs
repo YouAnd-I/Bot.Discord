@@ -1,7 +1,11 @@
-using Discord.Greet.System.NetCord;
-using Discord.Ping.System.NetCord;
+using Ecs.Loop.Frent;
 using Frent;
+using Greet.Adapter.NetCord;
+using Greet.System.Frent;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Ping.Adapter.NetCord;
+using Ping.System.Frent;
 
 using NetCord;
 
@@ -18,6 +22,11 @@ using NetCord.Services.ComponentInteractions;
 
 var builder = Host.CreateApplicationBuilder(args);
 
+// The game: one world and its rules, ticking on its own thread.
+// Everything below only sees it as IWorldClient.
+var world = new FrentWorldLoop(new World(), PingSystem.Execute, GreetSystem.Execute);
+builder.Services.AddHostedService(_ => new WorldTicker(world));
+
 builder.Services
     .AddDiscordGateway(options => options.Intents = default)
     .AddApplicationCommands()
@@ -26,7 +35,6 @@ builder.Services
     .AddComponentInteractions<ModalInteraction, ModalInteractionContext>();
 
 var host = builder.Build();
-var world = new World();
 
 var laya = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
 
@@ -576,6 +584,13 @@ public static class TicketStore
 
     private static string? Clean(string? s) =>
         s?.Replace("\r", " ").Replace("\n", " ").Replace("|", "/");
+}
+
+sealed class WorldTicker(FrentWorldLoop world) : BackgroundService
+{
+    // 20 ticks per second
+    protected override Task ExecuteAsync(CancellationToken stoppingToken) =>
+        world.RunAsync(TimeSpan.FromMilliseconds(50), stoppingToken);
 }
 
 public enum TicketPriority

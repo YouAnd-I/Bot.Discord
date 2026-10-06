@@ -17,8 +17,11 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\..\Project\CS\Discord.Greet.System.NetCord\src\Discord.Greet.System.NetCord.csproj" />
-    <ProjectReference Include="..\..\..\Project\CS\Discord.Ping.System.NetCord\src\Discord.Ping.System.NetCord.csproj" />
+    <ProjectReference Include="..\..\..\Project\CS\Ecs.Loop.Frent\src\Ecs.Loop.Frent.csproj" />
+    <ProjectReference Include="..\..\..\Project\CS\Greet.Adapter.NetCord\src\Greet.Adapter.NetCord.csproj" />
+    <ProjectReference Include="..\..\..\Project\CS\Greet.System.Frent\src\Greet.System.Frent.csproj" />
+    <ProjectReference Include="..\..\..\Project\CS\Ping.Adapter.NetCord\src\Ping.Adapter.NetCord.csproj" />
+    <ProjectReference Include="..\..\..\Project\CS\Ping.System.Frent\src\Ping.System.Frent.csproj" />
   </ItemGroup>
 
 </Project>
