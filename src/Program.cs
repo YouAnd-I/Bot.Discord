@@ -30,6 +30,7 @@ var builder = Host.CreateApplicationBuilder(args);
 // the record and the files are no longer written.
 ITicketStore store = TicketStore.Default;
 NpgsqlInteractions? interactions = null;
+IReverseSync? sheetsReverse = null;
 if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("Postgres__ConnectionString")))
 {
     var postgres = Environment.GetEnvironmentVariable("Postgres__ConnectionString")!;
@@ -39,14 +40,20 @@ if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("Postgres__Con
     store = pgStore;
     interactions = new NpgsqlInteractions(postgres);
 
+    var directory = new NpgsqlDirectory(postgres);
+    if (ulong.TryParse(Environment.GetEnvironmentVariable("Discord__ItUser"), out var itUser))
+        directory.SeedStaffIfEmpty(itUser, "on-call");
+    sheetsReverse = new DirectoryReverseSync(directory);
+
     // Finds InteractionAuditHandler: one row in Postgres per Discord interaction.
     builder.Services.AddSingleton(interactions);
     builder.Services.AddGatewayHandlers(typeof(Program).Assembly);
 }
 
-// Mirrors every Postgres table into a Google Sheet, one tab per table.
+// Mirrors every Postgres table into a Google Sheet, one tab per table, and
+// applies sheet edits in the editable tabs back into Postgres.
 if (SheetsOptions.FromEnvironment() is { } sheetsOptions)
-    builder.Services.AddHostedService(_ => new SheetsSyncService(sheetsOptions));
+    builder.Services.AddHostedService(_ => new SheetsSyncService(sheetsOptions, sheetsReverse));
 
 // The game: one world and its rules, ticking on its own thread.
 // Everything below only sees it as IWorldClient.
@@ -135,6 +142,15 @@ sealed class WorldTicker(FrentWorldLoop world) : BackgroundService
 {
     protected override Task ExecuteAsync(CancellationToken stoppingToken) =>
         world.RunAsync(TimeSpan.FromMilliseconds(50), stoppingToken);
+}
+
+sealed class DirectoryReverseSync(NpgsqlDirectory directory) : IReverseSync
+{
+    public IReadOnlyCollection<string> Tabs => NpgsqlDirectory.EditableTabs;
+
+    public Task ApplyAsync(string tab, IReadOnlyList<IReadOnlyList<string?>> rows,
+        CancellationToken ct = default) =>
+        Task.Run(() => directory.ReplaceFromSheet(tab, rows), ct);
 }
 
 public class FruitAutocompleteProvider : IAutocompleteProvider<AutocompleteInteractionContext>
