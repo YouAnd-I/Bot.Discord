@@ -6,7 +6,8 @@ using Ticket.Adapter.Npgsql;
 // receives — every slash command, button, select menu, modal and context menu,
 // whatever feature handles it — becomes one row in the interaction table, with
 // its options in interaction_option.
-sealed class InteractionAuditHandler(NpgsqlInteractions log) : IInteractionCreateGatewayHandler
+// NetCord's AddGatewayHandlers only discovers public classes — keep it public.
+public sealed class InteractionAuditHandler(NpgsqlInteractions log) : IInteractionCreateGatewayHandler
 {
     public async ValueTask HandleAsync(Interaction interaction)
     {
